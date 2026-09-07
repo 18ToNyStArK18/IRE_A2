@@ -1,0 +1,13 @@
+data/
+.venv/
+__pycache__/
+*.pyc
+*.zip
+*.pt
+*.ckpt
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+*.log
+.env
+IRE_A1/

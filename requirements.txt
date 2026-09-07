@@ -1,0 +1,8 @@
+pandas>=2.0
+numpy>=1.26
+pyarrow>=14.0
+huggingface_hub>=0.24
+tqdm>=4.66
+requests>=2.31
+pytest>=8.0
+matplotlib>=3.8
