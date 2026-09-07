@@ -63,8 +63,13 @@ VAL_FRACTION_OF_TRAIN_PERIOD = 0.10  # last 10% of the early period, by time, be
 POPULARITY_TOP_N = 500
 
 # --- A2 Q1: behavioural feature engineering ------------------------------
-RECENCY_DECAY_RATE = 0.9  # per-click-back decay for recency-weighted history score
+RECENCY_DECAY_RATE = 0.9  # positional decay for history_category_weights, and
+                           # the MIND fallback (no per-click timestamps) for
+                           # recency_weighted_engagement
+RECENCY_HALFLIFE_HOURS = 24.0  # true time-decay half-life where per-click
+                                # timestamps exist (EB-NeRD): a click's
+                                # contribution halves every this many hours
 SESSION_GAP_MINUTES = 30  # MIND has no native session_id; new session after this idle gap
-CTR_ALPHA = 10  # smoothed CTR = (click_count + CTR_ALPHA) / (display_count + CTR_BETA)
-CTR_BETA = 100
+CTR_PRIOR_STRENGTH = 50  # smoothed CTR = (clicks + CTR_PRIOR_STRENGTH*global_ctr) / (displays + CTR_PRIOR_STRENGTH)
+                          # global_ctr is measured from train, not a hand-picked constant (was 10/100 = 10% flat, ~2.5x MIND's real ~4%)
 POSITION_BIAS_LOG_BASE = "natural"  # 1/log(rank+2); "natural" or "2"

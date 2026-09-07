@@ -36,7 +36,11 @@ def build_feature_matrix(processed_dir, dataset: str, split: str, candidates_df:
     behaviors = sessionize.add_session_context(behaviors, dataset)
 
     articles_lookup = load_articles_lookup(processed_dir)
-    stats_lookup = article_stats.build_article_stats_lookup(processed_dir, dataset)
+    # One as-of-time index for ALL splits (train/val/test) -- for val/test it
+    # naturally reduces to the whole-train totals since every train event
+    # precedes them; for train rows themselves it excludes each row's own
+    # (and any later) outcome. See article_stats.py's docstring.
+    article_index = article_stats.TrainEventIndex(processed_dir, dataset)
 
     true_clicks: dict[str, set[str]] = {}
     impression_feats: dict[str, dict] = {}
@@ -58,7 +62,7 @@ def build_feature_matrix(processed_dir, dataset: str, split: str, candidates_df:
             int(cand.rank),
             impression_time[impr_id],
             impr_feat["_history_category_weights"],
-            stats_lookup,
+            article_index,
         )
 
         row_out = {"impression_id": impr_id, "article_id": cand.article_id}

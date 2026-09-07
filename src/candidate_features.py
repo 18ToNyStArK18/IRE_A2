@@ -3,6 +3,14 @@ retrieval rank), freshness, popularity/CTR, and category affinity/match --
 everything that differs from one candidate to the next within the same
 impression. Combined with impression_features.py's impression-level dict to
 form one training row per candidate (see feature_pipeline.py).
+
+Popularity/CTR/freshness come from an `article_stats.TrainEventIndex.as_of()`
+query (as-of the impression's own time), not a static whole-train snapshot --
+see article_stats.py's docstring for why that distinction matters for
+train-split leakage. Because as_of() already guarantees
+`freshness_reference_time < as_of_time` whenever `has_known_publish_time` is
+True, freshness_features() below no longer needs to detect/clamp a
+"reference is in the future" case itself -- that's resolved at the source.
 """
 
 from __future__ import annotations
@@ -12,16 +20,6 @@ import math
 import numpy as np
 
 from src import config
-
-_ARTICLE_STATS_DEFAULT = {
-    "category": None,
-    "click_count": 0,
-    "display_count": 0,
-    "ctr": config.CTR_ALPHA / config.CTR_BETA,
-    "log_click_count": 0.0,
-    "freshness_reference_time": None,
-    "has_known_publish_time": False,
-}
 
 
 def position_bias(rank: int, log_base: str = config.POSITION_BIAS_LOG_BASE) -> float:
@@ -36,7 +34,7 @@ def freshness_features(impression_time, article_stat: dict) -> dict:
     if not article_stat["has_known_publish_time"]:
         return {"freshness_log_hours": float("nan"), "has_known_publish_time": False}
     delta_hours = (impression_time - article_stat["freshness_reference_time"]).total_seconds() / 3600.0
-    delta_hours = max(delta_hours, 0.0)
+    delta_hours = max(delta_hours, 0.0)  # float-precision safety only; as_of() already guarantees delta > 0
     return {"freshness_log_hours": float(np.log1p(delta_hours)), "has_known_publish_time": True}
 
 
@@ -56,9 +54,9 @@ def build_candidate_features(
     rank: int,
     impression_time,
     history_category_weights: dict[str, float],
-    article_stats_lookup: dict[str, dict],
+    article_index,  # article_stats.TrainEventIndex
 ) -> dict:
-    stat = article_stats_lookup.get(article_id, _ARTICLE_STATS_DEFAULT)
+    stat = article_index.as_of(article_id, impression_time)
 
     features = {
         "position_bias": position_bias(rank),

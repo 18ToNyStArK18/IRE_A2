@@ -13,6 +13,7 @@ impression rather than once per candidate.
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 
 import numpy as np
@@ -20,14 +21,41 @@ import numpy as np
 from src import config
 
 
-def recency_weighted_engagement(history: list[str], decay_rate: float = config.RECENCY_DECAY_RATE) -> float:
-    """Sum of decay_rate**distance_from_latest over the history (most-recent
-    click = distance 0, weight 1). Bounded in [0, 1/(1-decay_rate)); grows
-    with both volume and recency of engagement, unlike a plain click count."""
+def recency_weighted_engagement(
+    history: list[str],
+    history_impression_time: list | None,
+    impression_time,
+    halflife_hours: float = config.RECENCY_HALFLIFE_HOURS,
+    positional_decay_rate: float = config.RECENCY_DECAY_RATE,
+) -> tuple[float, bool]:
+    """Sum of exp(-ln2/halflife * hours_since_click) over the history -- an
+    actual time-decayed engagement score (requires per-click timestamps,
+    EB-NeRD only). Returns (score, has_history_timestamps).
+
+    A positional decay (weight by rank in the list, not real elapsed time)
+    applied to a plain count -- the previous implementation -- is a pure
+    function of len(history): every history of the same length produces the
+    identical score regardless of how long ago those clicks actually were,
+    so it carries no recency signal beyond click_count itself. Where
+    per-click timestamps aren't available (MIND), we fall back to that
+    positional form anyway (weaker, but still a bounded engagement summary)
+    and flag it via has_history_timestamps=False so a model/analyst can tell
+    the two regimes apart rather than silently trusting a degenerate number.
+    """
     n = len(history)
     if n == 0:
-        return 0.0
-    return float(sum(decay_rate**i for i in range(n)))
+        return 0.0, False
+
+    if history_impression_time is not None and len(history_impression_time) == n:
+        lam = math.log(2) / halflife_hours
+        score = 0.0
+        for ts in history_impression_time:
+            hours = (impression_time - ts).total_seconds() / 3600.0
+            hours = max(hours, 0.0)  # float-precision safety; history is verified to precede impression_time
+            score += math.exp(-lam * hours)
+        return float(score), True
+
+    return float(sum(positional_decay_rate**i for i in range(n))), False
 
 
 def history_category_weights(
@@ -66,14 +94,19 @@ def build_impression_features(row, articles_lookup: dict[str, dict]) -> dict:
     """`row` is one itertuples() row of a behaviors_{split} DataFrame that
     has already been through sessionize.add_session_context."""
     history = list(row.history) if row.history is not None else []
+    history_impression_time = list(row.history_impression_time) if row.history_impression_time is not None else None
 
     dwell_mean, has_dwell = avg_history_dwell_time(
         list(row.history_read_time) if row.history_read_time is not None else None
     )
+    recency_score, has_history_timestamps = recency_weighted_engagement(
+        history, history_impression_time, row.time
+    )
 
     return {
         "click_count": len(history),
-        "recency_weighted_engagement": recency_weighted_engagement(history),
+        "recency_weighted_engagement": recency_score,
+        "has_history_timestamps": has_history_timestamps,
         "avg_history_dwell_time": dwell_mean,
         "has_dwell_time": has_dwell,
         "hour_of_day": row.time.hour,
