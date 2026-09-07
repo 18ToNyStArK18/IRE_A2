@@ -7,6 +7,12 @@ Unified articles schema (one row per article):
 Unified behaviors schema (one row per impression):
     dataset, raw_split, impression_id, user_id, time,
     history (list[str] article_ids, most-recent-last),
+    history_read_time (list[float|None] dwell-time seconds aligned 1:1 with
+        `history`, or dataset-level None when unavailable -- MIND has no
+        dwell-time signal at all),
+    history_impression_time (list[timestamp|None] aligned 1:1 with `history`,
+        or dataset-level None when unavailable),
+    session_id (str|None, EB-NeRD only -- MIND has no session concept),
     candidates (list[str] article_ids shown in this impression),
     labels (list[int] 0/1, aligned with candidates)
 
@@ -14,6 +20,15 @@ Unified behaviors schema (one row per impression):
 normalized to "train" (earlier period) / "dev" (later period: MIND's dev.tsv,
 EB-NeRD's validation/ folder) for both datasets, so split.py can turn it into
 a genuine temporal train/val/test split without shuffling anything.
+
+`history_read_time`/`history_impression_time` describe *past* clicks only
+(dwell time the user already spent on articles before this impression) --
+never confuse these with a candidate's own engagement, which isn't known
+until after it's shown. EB-NeRD's raw behaviors.parquet also carries the
+current impression's own `read_time`/`scroll_percentage` and the *next*
+impression's `next_read_time`/`next_scroll_percentage`; none of those are
+pulled into the unified schema because they describe an outcome not yet
+known at serving time (the next-impression fields are literally future data).
 """
 
 from __future__ import annotations
@@ -75,8 +90,15 @@ def _parse_mind_behaviors(path, raw_split: str) -> pd.DataFrame:
     df["labels"] = parsed.apply(lambda t: t[1])
     df["raw_split"] = raw_split
     df["dataset"] = "mind"
+    # MIND ships no dwell-time or session signal at all -- dataset-level None
+    # (not a per-item list of Nones) to mark "unavailable", distinct from
+    # EB-NeRD's per-history-item values.
+    df["history_read_time"] = None
+    df["history_impression_time"] = None
+    df["session_id"] = None
     return df[[
         "dataset", "raw_split", "impression_id", "user_id", "time", "history",
+        "history_read_time", "history_impression_time", "session_id",
         "candidates", "labels",
     ]]
 
@@ -127,12 +149,18 @@ def _parse_ebnerd_behaviors(behaviors_path, history_path, raw_split: str) -> pd.
     beh = pd.read_parquet(behaviors_path)
     hist = pd.read_parquet(history_path)
 
+    def _as_list(x):
+        return list(x) if x is not None else []
+
     hist_map = {
-        int(row.user_id): [
-            str(a) for a in (row.article_id_fixed if row.article_id_fixed is not None else [])
-        ]
+        int(row.user_id): {
+            "article_ids": [str(a) for a in _as_list(row.article_id_fixed)],
+            "read_times": _as_list(row.read_time_fixed),
+            "impression_times": _as_list(row.impression_time_fixed),
+        }
         for row in hist.itertuples(index=False)
     }
+    empty_hist = {"article_ids": [], "read_times": [], "impression_times": []}
 
     df = pd.DataFrame({
         "dataset": "ebnerd",
@@ -140,7 +168,12 @@ def _parse_ebnerd_behaviors(behaviors_path, history_path, raw_split: str) -> pd.
         "impression_id": beh["impression_id"].astype(str),
         "user_id": beh["user_id"].astype(str),
         "time": beh["impression_time"],
-        "history": beh["user_id"].apply(lambda u: hist_map.get(int(u), [])),
+        "history": beh["user_id"].apply(lambda u: hist_map.get(int(u), empty_hist)["article_ids"]),
+        "history_read_time": beh["user_id"].apply(lambda u: hist_map.get(int(u), empty_hist)["read_times"]),
+        "history_impression_time": beh["user_id"].apply(
+            lambda u: hist_map.get(int(u), empty_hist)["impression_times"]
+        ),
+        "session_id": beh["session_id"].astype(str),
         "candidates": beh["article_ids_inview"].apply(
             lambda x: [str(a) for a in x] if x is not None else []
         ),
