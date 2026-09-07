@@ -1,0 +1,73 @@
+"""Per-(impression, candidate) features: position bias (from the candidate's
+retrieval rank), freshness, popularity/CTR, and category affinity/match --
+everything that differs from one candidate to the next within the same
+impression. Combined with impression_features.py's impression-level dict to
+form one training row per candidate (see feature_pipeline.py).
+"""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+
+from src import config
+
+_ARTICLE_STATS_DEFAULT = {
+    "category": None,
+    "click_count": 0,
+    "display_count": 0,
+    "ctr": config.CTR_ALPHA / config.CTR_BETA,
+    "log_click_count": 0.0,
+    "freshness_reference_time": None,
+    "has_known_publish_time": False,
+}
+
+
+def position_bias(rank: int, log_base: str = config.POSITION_BIAS_LOG_BASE) -> float:
+    """1 / log(rank + 2). `rank` is the candidate's 1-indexed position in the
+    upstream retriever's (A1) top-K ranking -- not a position in the original
+    impression's display order, which most retrieved candidates never had."""
+    denom = math.log2(rank + 2) if log_base == "2" else math.log(rank + 2)
+    return 1.0 / denom
+
+
+def freshness_features(impression_time, article_stat: dict) -> dict:
+    if not article_stat["has_known_publish_time"]:
+        return {"freshness_log_hours": float("nan"), "has_known_publish_time": False}
+    delta_hours = (impression_time - article_stat["freshness_reference_time"]).total_seconds() / 3600.0
+    delta_hours = max(delta_hours, 0.0)
+    return {"freshness_log_hours": float(np.log1p(delta_hours)), "has_known_publish_time": True}
+
+
+def category_features(candidate_category: str | None, history_category_weights: dict[str, float]) -> dict:
+    if not candidate_category or not history_category_weights:
+        return {"category_binary_match": 0, "category_affinity": 0.0}
+    total = sum(history_category_weights.values())
+    weight = history_category_weights.get(candidate_category, 0.0)
+    return {
+        "category_binary_match": int(weight > 0),
+        "category_affinity": (weight / total) if total > 0 else 0.0,
+    }
+
+
+def build_candidate_features(
+    article_id: str,
+    rank: int,
+    impression_time,
+    history_category_weights: dict[str, float],
+    article_stats_lookup: dict[str, dict],
+) -> dict:
+    stat = article_stats_lookup.get(article_id, _ARTICLE_STATS_DEFAULT)
+
+    features = {
+        "position_bias": position_bias(rank),
+        "retrieval_rank": rank,
+        "click_count_article": stat["click_count"],
+        "display_count_article": stat["display_count"],
+        "log_click_count_article": stat["log_click_count"],
+        "ctr_article": stat["ctr"],
+    }
+    features.update(freshness_features(impression_time, stat))
+    features.update(category_features(stat["category"], history_category_weights))
+    return features

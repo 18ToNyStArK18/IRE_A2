@@ -61,3 +61,10 @@ VAL_FRACTION_OF_TRAIN_PERIOD = 0.10  # last 10% of the early period, by time, be
 
 # --- Feature store / popularity -----------------------------------------
 POPULARITY_TOP_N = 500
+
+# --- A2 Q1: behavioural feature engineering ------------------------------
+RECENCY_DECAY_RATE = 0.9  # per-click-back decay for recency-weighted history score
+SESSION_GAP_MINUTES = 30  # MIND has no native session_id; new session after this idle gap
+CTR_ALPHA = 10  # smoothed CTR = (click_count + CTR_ALPHA) / (display_count + CTR_BETA)
+CTR_BETA = 100
+POSITION_BIAS_LOG_BASE = "natural"  # 1/log(rank+2); "natural" or "2"
