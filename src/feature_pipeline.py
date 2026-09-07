@@ -31,16 +31,40 @@ def load_articles_lookup(processed_dir) -> dict[str, dict]:
     return {row.article_id: {"category": row.category} for row in articles.itertuples(index=False)}
 
 
-def build_feature_matrix(processed_dir, dataset: str, split: str, candidates_df: pd.DataFrame) -> pd.DataFrame:
+def build_feature_matrix(
+    processed_dir,
+    dataset: str,
+    split: str,
+    candidates_df: pd.DataFrame,
+    article_index: article_stats.TrainEventIndex | None = None,
+) -> pd.DataFrame:
+    """`article_index` may be built once by the caller and passed in when
+    building features for multiple splits back to back (train/val/test) --
+    it depends only on (processed_dir, dataset), not `split`, and rebuilding
+    it per call means re-scanning the whole of behaviors_train every time."""
     behaviors = pd.read_parquet(processed_dir / f"behaviors_{split}.parquet")
+    # Must sessionize the WHOLE split before filtering: an impression's
+    # backward-looking session counts depend on knowing every earlier
+    # impression in its session, so filtering to candidates_df's impressions
+    # first would silently undercount whenever an earlier same-session
+    # impression isn't itself one of the candidates being scored.
     behaviors = sessionize.add_session_context(behaviors, dataset)
 
+    # Impression-level features have no cross-row dependency once session
+    # context is attached, so -- unlike sessionize above -- this only needs
+    # to run for impressions candidates_df actually references, not the
+    # whole split (e.g. a dev-scale candidate subsample shouldn't pay for
+    # building features over impressions nothing will ever look up).
+    needed_impressions = set(candidates_df["impression_id"])
+    behaviors = behaviors[behaviors["impression_id"].isin(needed_impressions)]
+
     articles_lookup = load_articles_lookup(processed_dir)
-    # One as-of-time index for ALL splits (train/val/test) -- for val/test it
-    # naturally reduces to the whole-train totals since every train event
-    # precedes them; for train rows themselves it excludes each row's own
-    # (and any later) outcome. See article_stats.py's docstring.
-    article_index = article_stats.TrainEventIndex(processed_dir, dataset)
+    if article_index is None:
+        # One as-of-time index for ALL splits (train/val/test) -- for val/test
+        # it naturally reduces to the whole-train totals since every train
+        # event precedes them; for train rows themselves it excludes each
+        # row's own (and any later) outcome. See article_stats.py's docstring.
+        article_index = article_stats.TrainEventIndex(processed_dir, dataset)
 
     true_clicks: dict[str, set[str]] = {}
     impression_feats: dict[str, dict] = {}
