@@ -1,8 +1,18 @@
+# --- dataset pipeline (Part 0 / Q1) ---
 pandas>=2.0
 numpy>=1.26
 pyarrow>=14.0
 huggingface_hub>=0.24
 tqdm>=4.66
 requests>=2.31
-pytest>=8.0
 matplotlib>=3.8
+
+# --- NRMS baseline (Q3) ---
+# Upper bounds are left open on purpose: training happens on a remote GPU box,
+# which needs whatever CUDA wheel matches its driver.
+torch>=2.2
+transformers>=4.40
+scikit-learn>=1.4
+
+# --- dev ---
+pytest>=8.0
