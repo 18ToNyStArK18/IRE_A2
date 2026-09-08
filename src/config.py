@@ -66,9 +66,18 @@ POPULARITY_TOP_N = 500
 RECENCY_DECAY_RATE = 0.9  # positional decay for history_category_weights, and
                            # the MIND fallback (no per-click timestamps) for
                            # recency_weighted_engagement
-RECENCY_HALFLIFE_HOURS = 24.0  # true time-decay half-life where per-click
-                                # timestamps exist (EB-NeRD): a click's
-                                # contribution halves every this many hours
+# True time-decay half-life, used wherever per-click timestamps exist -- which
+# is EB-NeRD only (MIND ships none and takes the positional fallback above, so
+# this constant does not affect it). Fitted to EB-NeRD's actual history: the
+# per-split history.parquet is a *frozen* snapshot of the 21 days preceding the
+# behaviours period, so a click's age relative to the impression scoring it runs
+# 116-672h (measured p25/p50/p75 = 116/238/372h at the period start, rising to
+# 284/406/540h at its end). At the 24h we used first, every click at the end of
+# the period is >=168h old and so contributes at most 2^-7 -- the score collapses
+# to ~0.01 for everyone. 168h puts that measured interquartile range within 2-3
+# half-lives, where an exponential weight actually discriminates between users.
+# Revisit if the history ever becomes a rolling window instead of a snapshot.
+RECENCY_HALFLIFE_HOURS = 168.0
 SESSION_GAP_MINUTES = 30  # MIND has no native session_id; new session after this idle gap
 CTR_PRIOR_STRENGTH = 50  # smoothed CTR = (clicks + CTR_PRIOR_STRENGTH*global_ctr) / (displays + CTR_PRIOR_STRENGTH)
                           # global_ctr is measured from train, not a hand-picked constant (was 10/100 = 10% flat, ~2.5x MIND's real ~4%)

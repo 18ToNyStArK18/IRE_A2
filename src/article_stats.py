@@ -32,13 +32,22 @@ rather than silently clamped to "just published".
 
 from __future__ import annotations
 
+import array
 import math
-from bisect import bisect_left
 from collections import defaultdict
 
+import numpy as np
 import pandas as pd
 
 from src import config
+
+# Event times are stored as int64 nanoseconds-since-epoch rather than as
+# pd.Timestamp objects: MIND-small's train split alone has 5.84M (article,
+# display) pairs, and one Python object per event costs ~0.5-1 GB resident,
+# which does not survive MINDlarge. Raw int64 is 8 bytes/event (~49 MB for the
+# same split) and np.searchsorted over a sorted int64 array is exactly
+# bisect_left's "count of events strictly before t".
+_EMPTY_TIMES = np.empty(0, dtype=np.int64)
 
 
 class TrainEventIndex:
@@ -46,25 +55,27 @@ class TrainEventIndex:
         self.dataset = dataset
         train = pd.read_parquet(processed_dir / "behaviors_train.parquet", columns=["time", "candidates", "labels"])
 
-        display_times: dict[str, list] = defaultdict(list)
-        click_times: dict[str, list] = defaultdict(list)
+        # array.array("q") holds raw int64s, so accumulating an event retains no
+        # Python object -- see the _EMPTY_TIMES note above on why that matters.
+        display_times: dict[str, array.array] = defaultdict(lambda: array.array("q"))
+        click_times: dict[str, array.array] = defaultdict(lambda: array.array("q"))
         total_clicks = 0
         total_displays = 0
-        for t, candidates, labels in zip(train["time"], train["candidates"], train["labels"]):
+        times_ns = train["time"].to_numpy(dtype="datetime64[ns]").astype(np.int64)
+        for t_ns, candidates, labels in zip(times_ns, train["candidates"], train["labels"]):
+            t_ns = int(t_ns)
             for article_id, label in zip(candidates, labels):
-                display_times[article_id].append(t)
+                display_times[article_id].append(t_ns)
                 total_displays += 1
                 if label == 1:
-                    click_times[article_id].append(t)
+                    click_times[article_id].append(t_ns)
                     total_clicks += 1
 
-        for times in display_times.values():
-            times.sort()
-        for times in click_times.values():
-            times.sort()
-
-        self._display_times = display_times
-        self._click_times = click_times
+        # behaviors_train is already time-ordered (split.py sorts before
+        # slicing), so these sorts are cheap -- kept so as_of() cannot silently
+        # go wrong if that ever stops holding.
+        self._display_times = {a: np.sort(np.asarray(b, dtype=np.int64)) for a, b in display_times.items()}
+        self._click_times = {a: np.sort(np.asarray(b, dtype=np.int64)) for a, b in click_times.items()}
         self.global_ctr = (total_clicks / total_displays) if total_displays else 0.0
 
         articles = pd.read_parquet(processed_dir / "articles.parquet", columns=["article_id", "category"])
@@ -76,10 +87,14 @@ class TrainEventIndex:
             self._published_time = dict(zip(published["article_id"], published["published_time"]))
 
     def as_of(self, article_id: str, as_of_time) -> dict:
-        displays = self._display_times.get(article_id, [])
-        clicks = self._click_times.get(article_id, [])
-        display_count = bisect_left(displays, as_of_time)  # count strictly before as_of_time
-        click_count = bisect_left(clicks, as_of_time)
+        as_of_ts = pd.Timestamp(as_of_time)
+        as_of_ns = as_of_ts.value
+        displays = self._display_times.get(article_id, _EMPTY_TIMES)
+        clicks = self._click_times.get(article_id, _EMPTY_TIMES)
+        # side="left" == bisect_left: count of events strictly before as_of_time,
+        # so an impression's own click never enters its own feature.
+        display_count = int(np.searchsorted(displays, as_of_ns, side="left"))
+        click_count = int(np.searchsorted(clicks, as_of_ns, side="left"))
 
         ctr = (click_count + config.CTR_PRIOR_STRENGTH * self.global_ctr) / (
             display_count + config.CTR_PRIOR_STRENGTH
@@ -87,11 +102,13 @@ class TrainEventIndex:
 
         if self._published_time is not None:
             ref = self._published_time.get(article_id)
-            has_known = ref is not None and not pd.isna(ref) and ref < as_of_time
+            has_known = ref is not None and not pd.isna(ref) and ref < as_of_ts
             freshness_reference_time = ref if has_known else None
         else:
             has_known = display_count > 0
-            freshness_reference_time = displays[0] if has_known else None
+            # display_count > 0 guarantees displays[0] < as_of_time, so the
+            # reference can never be in the future relative to the query.
+            freshness_reference_time = pd.Timestamp(int(displays[0]), unit="ns") if has_known else None
 
         return {
             "category": self._category.get(article_id),

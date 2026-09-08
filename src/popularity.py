@@ -2,11 +2,17 @@
 behaviors_train (never val/test, to avoid leaking future popularity).
 
 Popularity = raw click count (label == 1) per article_id in the train split.
-Also records `display_count` (how many times an article was shown as a
-candidate at all, click or not, in train) so downstream feature engineering
-can compute a smoothed CTR = (click_count + alpha) / (display_count + beta)
-without recomputing this scan -- same train-only discipline as click_count,
-since display_count is exactly as leakage-sensitive (Q9).
+`display_count` (how many times an article was shown as a candidate at all,
+click or not, in train) is recorded alongside it, under the same train-only
+discipline -- display_count is exactly as leakage-sensitive as click_count (Q9).
+
+Scope: these two files are the A1-style static top-N fallback list plus a
+whole-train diagnostic. Q1's per-candidate popularity/CTR/freshness features do
+NOT read them -- article_stats.TrainEventIndex does its own scan and answers
+each query as of the scoring impression's own time. A single whole-train
+aggregate is fine for val/test rows (all of train precedes them) but leaks into
+train rows themselves: an article clicked in impression I would have that very
+click folded into the popularity figure handed back to score I.
 """
 
 from __future__ import annotations
