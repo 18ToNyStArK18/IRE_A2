@@ -84,6 +84,7 @@ def build_feature_matrix(
         cand_feat = build_candidate_features(
             cand.article_id,
             int(cand.rank),
+            float(cand.retrieval_score),
             impression_time[impr_id],
             impr_feat["_history_category_weights"],
             article_index,

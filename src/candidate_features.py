@@ -52,6 +52,7 @@ def category_features(candidate_category: str | None, history_category_weights: 
 def build_candidate_features(
     article_id: str,
     rank: int,
+    retrieval_score: float,
     impression_time,
     history_category_weights: dict[str, float],
     article_index,  # article_stats.TrainEventIndex
@@ -61,6 +62,18 @@ def build_candidate_features(
     features = {
         "position_bias": position_bias(rank),
         "retrieval_rank": rank,
+        # The retriever's raw score, kept alongside its rank because rank is a
+        # monotone *discretisation* of it and throws away the margin: a top hit
+        # scoring 495 against a runner-up at 390 and one scoring 495 against 494
+        # are both just "rank 1 vs rank 2". Stage 1's ordering is exactly what
+        # the re-ranker is trying to beat, so how confidently it made each call
+        # is signal worth keeping.
+        #
+        # Scale is retriever-specific (BM25 is unbounded and ran 30-1915 on
+        # EB-NeRD val; cosine is [-1, 1]), so it is only comparable within one
+        # method. Train one model per candidate source, or normalise per
+        # impression first, before mixing them.
+        "retrieval_score": float(retrieval_score),
         "click_count_article": stat["click_count"],
         "display_count_article": stat["display_count"],
         "log_click_count_article": stat["log_click_count"],
