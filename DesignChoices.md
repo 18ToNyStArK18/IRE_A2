@@ -184,10 +184,24 @@ sampling: 1 positive + npratio negatives, categorical cross-entropy). Choosing a
 listwise-flavoured objective for the GBDT makes baseline and re-ranker
 methodologically parallel, which is a cleaner comparison to write up.
 
-### 1.4 Decision — **PROPOSED**
+### 1.4 Decision — **FINAL (signed off 2026-09-10)**
 
-**Primary: LambdaMART** (`objective="lambdarank"`), with `rank_xendcg` as a
-cheap second arm and **pointwise `binary` as the ablation baseline**.
+> **The method we are building: LambdaMART.**
+>
+> LightGBM `objective="lambdarank"` — RankNet pairwise gradients, each pair
+> weighted by |ΔnDCG| from swapping it, boosted over regression trees (MART).
+> Family, stated precisely for the report: **pairwise gradient, weighted by a
+> listwise metric (nDCG)**. Not strictly listwise; not plain pairwise.
+>
+> LambdaMART *is* the GBDT — MART is Multiple Additive Regression Trees — so it
+> is LambdaRank gradients **inside** a GBDT, not a GBDT layered on top of
+> something else.
+>
+> No cross-encoder (§2.6). The ablation isolates the contribution of the Q1
+> feature groups (§3).
+
+With `rank_xendcg` as a cheap second arm and **pointwise `binary` as the
+ablation baseline**.
 
 Reasons:
 
@@ -301,7 +315,7 @@ between query and document the way a cross-encoder can, so it is a weaker
 semantic signal — but it costs ~0.001% of the compute and closes a requirement
 gap.
 
-### 2.6 Decision — **PROPOSED**
+### 2.6 Decision — **FINAL (signed off 2026-09-10)**
 
 **GBDT alone is sufficient for this assignment.** Add the **bi-encoder
 similarity feature** (cheap, closes the Q1.1 embeddings gap). **Do not build the
@@ -321,7 +335,11 @@ note as future work; not worth building now.
 
 ## 3. Open decisions
 
-- [ ] Sign-off on §1.4 (LambdaMART primary) and §2.6 (no cross-encoder).
+- [x] ~~Sign-off on §1.4 (LambdaMART primary) and §2.6 (no cross-encoder).~~
+      **Done 2026-09-10.** Ablation is over the Q1 feature groups.
+- [ ] Raising A1's retrieval recall is tracked in `todo.md`, deliberately
+      deferred: the re-ranker consumes the candidate contract regardless of
+      candidate quality, so better retrieval changes the numbers, not the code.
 - [ ] **MIND train scale.** 27.7M rows before filtering. Group pre-filtering
       (§1.5) cuts it to ~1.2M, which is comfortable — confirm that is the chosen
       route rather than subsampling impressions.
