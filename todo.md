@@ -40,6 +40,13 @@ dataset/method/splits, then retrain the re-ranker. Nothing else needs touching.
 
 ### Q3 framing: NRMS and the re-ranker are not comparable
 
+**Now confirmed with numbers on both sides** (DesignChoices.md §2C). Same 25,356
+EB-NeRD test impressions: NRMS scores AUC 0.5425 on the in-view set, the
+re-ranker 0.9592 on A1's top-200. The re-ranker is not better — it is solving an
+easier discrimination. Meanwhile NRMS's MRR is 0.3394 against the re-ranker's
+0.0182, because the two-stage pipeline is capped by A1's ~3.5% recall.
+
+
 NRMS scores the impression's **in-view set** (~20 candidates, always containing
 the click). The re-ranker scores A1's **top-200** (~96% with no click at all).
 Q3 asks to "reproduce the baseline, then beat it", but the re-ranker

@@ -333,6 +333,148 @@ note as future work; not worth building now.
 
 ---
 
+## 2B. First results — and why the headline numbers are not what they look like
+
+EB-NeRD, BM25 candidates, K=200, test split (25,356 impressions). Trained on the
+752 train impressions that contain a positive; evaluated over the full
+population.
+
+| metric | before (BM25 order) | after (LambdaMART) | change |
+|---|---|---|---|
+| AUC | 0.5377 | **0.9592** | +0.42 |
+| MRR | 0.0010 | **0.0182** | 18x |
+| nDCG@5 | 0.0006 | **0.0193** | 32x |
+| nDCG@10 | 0.0009 | **0.0195** | 22x |
+
+Within the 647 test impressions whose click was retrieved, MRR goes
+0.0392 → 0.7148 — the positive moves from median rank 80 to roughly rank 1–2.
+That is **71% of the available headroom** (§0.1) captured.
+
+### Why this is not as good as it looks
+
+**Feature importance (gain):**
+
+| feature | gain |
+|---|---|
+| freshness_log_hours | **79.9%** |
+| display_count_article | 10.2% |
+| category_affinity | 1.4% |
+| retrieval_score | 1.1% |
+| everything else (18 features) | 7.4% |
+
+Roughly 90% of the model is "how fresh is this article" plus "how often has it
+been shown" — almost none of it is personalisation.
+
+**Single-feature rankers, no model at all**, same population:
+
+| ranker | AUC | MRR | nDCG@5 |
+|---|---|---|---|
+| freshness only (fresher first) | **0.8475** | 0.0011 | 0.0000 |
+| display_count only | 0.4106 | 0.0007 | 0.0005 |
+| retrieval_score only (= the BM25 baseline) | 0.5377 | 0.0010 | 0.0006 |
+| full LambdaMART (22 features) | 0.9592 | 0.0182 | 0.0193 |
+
+This splits the result cleanly in two, and the two halves deserve opposite
+verdicts:
+
+1. **The AUC is largely an artefact and should not be the headline.** Freshness
+   *alone* reaches 0.8475 of the model's 0.9592. The reason is structural: the
+   199 negatives are drawn from the **whole catalogue**, including articles long
+   out of circulation, while the single positive is one the platform actually
+   **displayed** and the user **clicked**. Recency nearly separates those two
+   populations by itself. The model is substantially solving "which of these 200
+   catalogue articles could plausibly have been on the site at that moment",
+   which is a much easier and much less interesting question than "which will
+   this user click".
+2. **The MRR/nDCG gains are real and are not explained by freshness.** Freshness
+   alone scores nDCG@5 = 0.0000 — sorting purely by recency never once puts the
+   positive in the top 5. It is a good *coarse* filter (lifting the positive to
+   roughly rank 30 of 200) and useless as a final ranker. Getting from rank 30 to
+   rank 1–2 is what the other 20% of the gain buys, and that is the part the
+   metrics we actually report depend on.
+
+So the model is doing genuine work at the top of the list, and the coarse
+separation it leans on is largely free.
+
+### Consequences to carry into the report
+
+- **Report MRR and nDCG as the headline; treat AUC as diagnostic.** Here AUC is
+  dominated by an easy, non-personalised discrimination and overstates the
+  result badly.
+- **Do not put this AUC beside NRMS's.** NRMS discriminates among ~20 articles
+  the platform already chose to display; this discriminates a displayed article
+  from catalogue randoms. Different task, different negative distribution, not
+  comparable. (This is the unresolved Q3 framing issue in `todo.md`.)
+- **Absolute numbers stay bounded by retrieval.** MRR 0.0182 against a ceiling
+  of 0.0255 on this split — the remaining 96% of impressions are unreachable no
+  matter how good the ranker gets.
+- **The Q3 feature-group ablation is at risk of a null result.** With freshness
+  and display-count carrying ~90% of the gain, ablating the behavioural feature
+  group may barely move the metrics. That is a legitimate finding, but plan for
+  reporting it rather than being surprised by it — and note it is partly an
+  artefact of easy negatives, which better retrieval (see `todo.md`) would fix by
+  making the negatives harder.
+
+---
+
+## 2C. NRMS baseline results (Q3.1) — trained by teammate
+
+Both datasets, evaluated on our own temporal test split.
+
+| | EB-NeRD (demo) | MIND (small) |
+|---|---|---|
+| AUC | 0.5425 | **0.6040** |
+| MRR | **0.3394** | 0.2750 |
+| nDCG@5 | **0.3770** | 0.2961 |
+| nDCG@10 | **0.4570** | 0.3617 |
+| impressions | 25,356 | 73,152 |
+| epochs (cap) | 15/20 | 8/10 |
+| early stopped | yes | yes |
+| best val AUC | 0.5779 | 0.6585 |
+| peak GPU (train) | 3,869 MiB | 780 MiB |
+| peak GPU (eval) | 2,893 MiB | 4,544 MiB |
+| wall time | 23 min | 77 min |
+
+**Both runs early-stopped inside their epoch caps**, which is the gate that
+matters: `train.py` warns when a run ends by exhausting epochs instead, because
+an unconverged baseline makes any later "improvement" partly an artefact of
+training longer. These are converged baselines, so a Q3 gain can be attributed
+to the change rather than to extra training.
+
+### This settles the comparability question empirically
+
+The impression counts above (25,356 / 73,152) are **exactly our test splits** —
+the same rows the re-ranker is evaluated on. So the population is identical and
+the *only* thing that differs is the candidate set. That isolates the effect
+cleanly:
+
+| EB-NeRD test, 25,356 impressions | AUC |
+|---|---|
+| NRMS, scoring the **in-view set** (~20 platform-chosen articles) | 0.5425 |
+| LambdaMART, scoring **A1's top-200** (catalogue-drawn) | 0.9592 |
+
+The re-ranker is not 77% better than NRMS. It is solving a **much easier
+discrimination**: telling an article the platform actually displayed apart from
+199 catalogue articles, most of which were stale or out of circulation — which
+§2B showed freshness alone nearly achieves (AUC 0.8475 with no model). NRMS is
+discriminating among ~20 articles the platform had *already* judged plausible,
+where recency carries almost no signal because they are all current.
+
+Consequences, now backed by numbers on both sides:
+
+- **Never put 0.9592 beside 0.5425 without this explanation.** A grader will
+  read the raw pair as the re-ranker crushing the baseline, which is false.
+- **NRMS's MRR/nDCG are far higher than the re-ranker's** (0.3394 vs 0.0182 on
+  EB-NeRD) and that comparison *is* meaningful in the direction that matters:
+  the two-stage pipeline is bounded by A1's ~3.5% recall, so it cannot approach
+  a single-stage model that never discards the answer. This is the strongest
+  available argument for the `todo.md` retrieval-recall work.
+- Q3's "beat the baseline" therefore cannot mean "re-ranker beats NRMS on these
+  numbers". It has to be either (a) an improvement to NRMS itself, or (b) a
+  same-candidate-set before/after, which is the §2B result.
+
+---
+
 ## 3. Open decisions
 
 - [x] ~~Sign-off on §1.4 (LambdaMART primary) and §2.6 (no cross-encoder).~~
