@@ -475,6 +475,120 @@ Consequences, now backed by numbers on both sides:
 
 ---
 
+## 2D. All four configurations — results and what they reveal
+
+Test split, K=200, LambdaMART. "Headroom" = achieved MRR as a fraction of the
+ceiling (§0.1), i.e. how much of what retrieval made *reachable* was claimed.
+
+| config | recall@200 | AUC | MRR | nDCG@5 | nDCG@10 | headroom | iters | train impr |
+|---|---|---|---|---|---|---|---|---|
+| ebnerd/bm25 | 0.0255 | 0.5377 → **0.9592** | 0.0010 → **0.0182** | 0.0006 → 0.0193 | 0.0009 → 0.0195 | **71.5%** | 17 | 752 |
+| ebnerd/semantic | 0.0249 | 0.4774 → **0.9421** | 0.0006 → **0.0180** | 0.0002 → 0.0192 | 0.0003 → 0.0193 | **72.3%** | 13 | 671 |
+| mind/bm25 | 0.0290 | 0.6220 → **0.6033** ⚠ | 0.0013 → 0.0032 | 0.0007 → 0.0029 | 0.0014 → 0.0036 | 10.9% | 80 | 23,589 |
+| mind/semantic | 0.0387 | 0.5348 → 0.5888 | 0.0017 → **0.0041** | 0.0012 → 0.0037 | 0.0015 → 0.0046 | 10.6% | 11 | 8,528 |
+
+### Finding 1 — the retrieval *method* barely matters; the *dataset* decides everything
+
+Within a dataset the two retrievers land in almost the same place (EB-NeRD
+71.5% vs 72.3% headroom, MRR 0.0182 vs 0.0180; MIND 10.9% vs 10.6%). Across
+datasets the gap is ~7x. So swapping BM25 for embedding retrieval buys
+essentially nothing once a re-ranker sits on top — the re-ranker washes the
+difference out, because it re-scores the same 200 items either way and both
+retrievers surface a similarly *reachable* set.
+
+What does matter is retrieval **recall**, which is a hard ceiling no re-ranker
+can cross. Practical implication for the `todo.md` work: effort spent making
+stage 1 recall higher is worth far more than effort spent choosing between BM25
+and embeddings.
+
+### Finding 2 — MIND/BM25's recall collapses across the temporal split
+
+Recall@200 by split, the whole reason MIND/bm25 is the only config whose AUC
+*degrades*:
+
+| config | train | val | test | train/test |
+|---|---|---|---|---|
+| mind/bm25 | 0.1702 | 0.0634 | 0.0290 | **5.9x** |
+| mind/semantic | 0.0615 | 0.0592 | 0.0387 | 1.6x |
+| ebnerd/bm25 | 0.0336 | 0.0353 | 0.0255 | 1.3x |
+| ebnerd/semantic | 0.0300 | 0.0456 | 0.0249 | 1.2x |
+
+MIND/bm25 trains on a population where retrieval succeeds **17%** of the time
+and is evaluated where it succeeds **2.9%** — a train/eval distribution mismatch
+severe enough to make the model actively worse than the ordering it started
+from. The others are stable at 1.2–1.6x.
+
+The mechanism is news turnover: BM25 matches the *lexical* content of older
+history, and as the news cycle advances the articles actually being shown share
+less vocabulary with what the user read days ago. Embeddings degrade far more
+gracefully (1.6x), and **MIND/semantic's test recall (3.87%) beats BM25's
+(2.90%) despite being 3x lower on train** — semantic retrieval generalises
+across time much better here. Worth stating in the report: it inverts the
+train-set ranking.
+
+### Finding 3 — feature importance tracks data availability, giving a free ablation
+
+| config | top features |
+|---|---|
+| ebnerd/bm25 | freshness **80%**, display_count 10%, category_affinity 1% |
+| ebnerd/semantic | freshness **87%**, display_count 7%, click_count_article 1% |
+| mind/bm25 | freshness 34%, display_count 23%, click_count_article 22% |
+| mind/semantic | display_count **48%**, click_count_article 29%, freshness 12% |
+
+EB-NeRD ships a real `published_time`, and its models put 80–87% of their weight
+on freshness. MIND has no publish date — ours is the proxy "first seen as a
+candidate in train" — and freshness drops to 34% and then 12%, with popularity
+counts taking over.
+
+**The two datasets therefore form a natural ablation of freshness quality**, and
+it lines up exactly with performance: the configs with real freshness capture
+~72% of headroom, the ones with proxy freshness capture ~11%. That is the
+single clearest signal in these results, and it is worth more than an artificial
+feature-drop ablation because nothing was held out by hand — the datasets simply
+differ in what they record.
+
+### Finding 4 — more training data did not help, at all
+
+MIND/bm25 trains on **23,589** impressions to EB-NeRD/bm25's **752** — 31x more
+— and captures a seventh of the headroom. MIND/semantic (8,528) likewise loses
+to EB-NeRD/semantic (671). This is not a data-quantity problem, and no amount of
+extra MIND impressions would fix it. It is a feature-quality problem (Finding 3)
+compounded by a distribution shift (Finding 2).
+
+Corollary for tuning: `best_iteration` says the same thing. EB-NeRD stops at
+13–17 rounds on <800 groups, MIND/bm25 grinds to 80 — spending far more capacity
+to extract far less.
+
+### Finding 5 — "before" AUC below 0.5
+
+EB-NeRD/semantic starts at AUC **0.4774**: stage 1 orders its own candidates
+*worse than random* with respect to what was clicked. Its retrieval score is
+anti-correlated with relevance, which is a striking statement about the gap
+between "similar to the user's history" and "the thing they clicked". It still
+reaches 0.9421 after re-ranking.
+
+### Timings (measured, this machine)
+
+| stage | time |
+|---|---|
+| EB-NeRD artifact download (361 MB) | ~7 min at 1.2 MB/s (was ~1h40m before a network change) |
+| MIND MiniLM embeddings (65,238 articles, CPU) | ~10 min |
+| EB-NeRD embeddings (load provided artifact) | seconds |
+| MIND bm25 candidates (3 splits) | ~1m40s |
+| MIND semantic candidates (3 splits) | ~15 min |
+| EB-NeRD bm25 candidates (3 splits) | ~45s |
+| EB-NeRD semantic candidates (3 splits) | ~3 min |
+| re-ranker mind/bm25 | 7m43s |
+| re-ranker mind/semantic | 2m16s |
+| re-ranker ebnerd/* | <1 min each |
+
+Note on benchmarking: an initial estimate of 77 min for MIND semantic retrieval
+came from timing a sample *while the real job was running*, and overstated it by
+5x — the contended sample never saw the BLAS threading the real run had. Do not
+benchmark under contention.
+
+---
+
 ## 3. Open decisions
 
 - [x] ~~Sign-off on §1.4 (LambdaMART primary) and §2.6 (no cross-encoder).~~

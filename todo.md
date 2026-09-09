@@ -16,6 +16,18 @@ regardless of how good the candidates are. Better candidates change the
 *numbers*, not the code. So the re-ranker gets built first, and A1 can be
 improved underneath it afterwards without any rework on the A2 side.
 
+**Now the single highest-value item, confirmed by results** (DesignChoices.md
+§2D): swapping BM25 for embedding retrieval changed the final MRR by <2% within
+a dataset, while the recall difference between datasets moved headroom capture
+from 11% to 72%. Retrieval *recall* is the binding constraint; the retrieval
+*method* is nearly irrelevant once the re-ranker is applied.
+
+Also note MIND/bm25's recall collapses 5.9x from train (17.0%) to test (2.9%),
+which is severe enough that its re-ranker ends up *worse* than the ordering it
+started from. Semantic retrieval degrades only 1.6x and wins on test recall
+despite losing on train — so a time-aware or embedding-based retriever is the
+more promising direction.
+
 **Ideas to try in A1, roughly cheapest first:**
 
 - Restrict the retrieval pool by time — only articles published/first-seen

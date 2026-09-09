@@ -290,21 +290,79 @@ def run(dataset: str, method: str, eval_split: str = "test", k: int | None = Non
     return report
 
 
+METRIC_NAMES = ("auc", "mrr", "ndcg@5", "ndcg@10")
+
+
+def summary_table(reports: list[dict]) -> pd.DataFrame:
+    """One row per (dataset, method), before vs after side by side."""
+    rows = []
+    for report in reports:
+        before, after = report["before"], report["after"]
+        row = {
+            "dataset": report["dataset"],
+            "method": report["method"],
+            "split": report["eval_split"],
+            "impressions": before["n_impressions"],
+            "with_positive": before["n_impressions_scored"],
+            "recall@k": before["n_impressions_scored"] / before["n_impressions"],
+        }
+        for name in METRIC_NAMES:
+            row[f"{name}_before"] = before[name]
+            row[f"{name}_after"] = after[name]
+        # MRR ceiling is the share of impressions whose click was retrieved at
+        # all: even a perfect ranker cannot score the rest.
+        row["mrr_ceiling"] = row["recall@k"]
+        row["headroom_captured"] = after["mrr"] / row["recall@k"] if row["recall@k"] else float("nan")
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def main() -> None:
     import argparse
+    import time
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--dataset", choices=["mind", "ebnerd"], required=True)
-    parser.add_argument("--method", choices=["bm25", "semantic"], default="bm25")
+    parser.add_argument("--dataset", choices=["mind", "ebnerd", "all"], default="all")
+    parser.add_argument("--method", choices=["bm25", "semantic", "all"], default="all")
     parser.add_argument("--eval-split", choices=["val", "test"], default="test")
     parser.add_argument("--k", type=int, default=None, help="slice candidates to top-k (default: all persisted)")
     args = parser.parse_args()
 
-    report = run(args.dataset, args.method, args.eval_split, args.k)
-    before, after = report["before"], report["after"]
-    print(f"\n[{args.dataset}:{args.method}:{args.eval_split}] over {before['n_impressions']} impressions")
-    for name in ("auc", "mrr", "ndcg@5", "ndcg@10"):
-        print(f"  {name:8s} before={before[name]:.4f}  after={after[name]:.4f}")
+    datasets = ["mind", "ebnerd"] if args.dataset == "all" else [args.dataset]
+    methods = ["bm25", "semantic"] if args.method == "all" else [args.method]
+
+    reports = []
+    for dataset in datasets:
+        for method in methods:
+            processed_dir = candidates_module.PROCESSED_DIRS[dataset]
+            missing = [
+                split
+                for split in ("train", "val", args.eval_split)
+                if not candidates_module.candidates_path(processed_dir, method, split).exists()
+            ]
+            if missing:
+                print(f"[{dataset}:{method}] skipped -- missing candidates for {sorted(set(missing))}")
+                continue
+
+            started = time.perf_counter()
+            report = run(dataset, method, args.eval_split, args.k)
+            report["seconds"] = round(time.perf_counter() - started, 1)
+            reports.append(report)
+            before, after = report["before"], report["after"]
+            print(
+                f"[{dataset}:{method}:{args.eval_split}] {report['seconds']}s  "
+                + "  ".join(f"{n}: {before[n]:.4f}->{after[n]:.4f}" for n in METRIC_NAMES)
+            )
+
+    if not reports:
+        print("nothing to run")
+        return
+
+    table = summary_table(reports)
+    out_path = config.PROCESSED_DIR / f"reranker_summary_{args.eval_split}.csv"
+    table.to_csv(out_path, index=False)
+    print(f"\n{table.to_string(index=False, float_format=lambda v: f'{v:.4f}')}")
+    print(f"\nsaved {out_path}")
 
 
 if __name__ == "__main__":
