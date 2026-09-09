@@ -82,3 +82,32 @@ SESSION_GAP_MINUTES = 30  # MIND has no native session_id; new session after thi
 CTR_PRIOR_STRENGTH = 50  # smoothed CTR = (clicks + CTR_PRIOR_STRENGTH*global_ctr) / (displays + CTR_PRIOR_STRENGTH)
                           # global_ctr is measured from train, not a hand-picked constant (was 10/100 = 10% flat, ~2.5x MIND's real ~4%)
 POSITION_BIAS_LOG_BASE = "natural"  # 1/log(rank+2); "natural" or "2"
+
+# --- A2 Q2: candidate generation -----------------------------------------
+# Top-K retrieved per impression by A1's retriever and handed to the re-ranker.
+# A2 Q2 asks for K ~ 100-200; we persist at 200 so K stays a tunable knob
+# without re-running retrieval.
+CANDIDATE_K = 200
+
+# A1's ablation-winning configs (src/run_ablation_study.py -> the configs
+# compare_final_configs.py locked in, which are also what A1 actually submitted
+# to both leaderboards). BM25's winning query-construction method differs by
+# dataset; both use title-only over a 10-click window.
+BM25_CANDIDATE_CONFIG = {
+    "mind": {"fields": ["title"], "window": 10, "method": "tfidf_keywords"},
+    "ebnerd": {"fields": ["title"], "window": 10, "method": "recency_weighted"},
+}
+# Semantic: both pool over the FULL history (window=None); MIND mean-pools,
+# EB-NeRD max-pools.
+SEMANTIC_CANDIDATE_CONFIG = {
+    "mind": {"pooling": "mean", "window": None},
+    "ebnerd": {"pooling": "max", "window": None},
+}
+
+# MIND's semantic retriever uses MiniLM, NOT MIND_BERT_MODEL: A1 validated a
+# bootstrap-significant AUC gain (0.575 -> 0.631, non-overlapping 95% CIs) over
+# bert-base-uncased, and MiniLM is ~13x faster to encode a catalogue with.
+# Deliberately a separate constant from MIND_BERT_MODEL, which the NRMS
+# baseline uses as its tokenizer/word-vector source -- repointing that would
+# silently change the Q3 baseline too.
+MIND_SEMANTIC_MODEL = "sentence-transformers/all-MiniLM-L6-v2"

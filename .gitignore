@@ -10,4 +10,3 @@ __pycache__/
 .ipynb_checkpoints/
 *.log
 .env
-IRE_A1/

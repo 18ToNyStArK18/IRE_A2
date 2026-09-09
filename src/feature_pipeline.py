@@ -3,8 +3,8 @@ with the impression-level (impression_features.py) and candidate-level
 (candidate_features.py) feature builders, and derives training labels from
 ground-truth clicks.
 
-Candidate contract (from A1 -- whichever retriever ends up wired in, BM25 or
-embedding-based -- this module doesn't care which):
+Candidate contract (produced by src/candidates.py from A1's retriever -- BM25
+or embedding-based; this module doesn't care which):
     impression_id: str
     article_id: str
     rank: int   (1-indexed position within that impression's retrieved list)
@@ -98,16 +98,10 @@ def build_feature_matrix(
     return pd.DataFrame(rows)
 
 
-def build_stub_candidates_from_impression(processed_dir, split: str) -> pd.DataFrame:
-    """DEV-ONLY placeholder standing in for A1's real top-K retriever, which
-    isn't wired in yet. Uses each impression's own (already-labeled) shown
-    candidate list, ranked in its original display order, purely so this
-    pipeline can be run and sanity-checked end to end right now. Delete/
-    replace once A1's candidate generator is integrated -- production
-    candidates must come from full-catalog retrieval (A1 Q2/Q3), not this."""
-    behaviors = pd.read_parquet(processed_dir / f"behaviors_{split}.parquet", columns=["impression_id", "candidates"])
-    rows = []
-    for row in behaviors.itertuples(index=False):
-        for rank, article_id in enumerate(row.candidates, start=1):
-            rows.append({"impression_id": row.impression_id, "article_id": article_id, "rank": rank})
-    return pd.DataFrame(rows)
+def load_candidates(processed_dir, method: str, split: str, k: int | None = None) -> pd.DataFrame:
+    """Candidates now come from A1's retriever -- see src/candidates.py, which
+    generates and persists them. Re-exported here so callers have one import
+    for the whole feature-building path."""
+    from src.candidates import load_candidates as _load
+
+    return _load(processed_dir, method, split, k)
