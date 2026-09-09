@@ -26,9 +26,13 @@ LEARNING_RATE = 1e-4
 NPRATIO = 4  # negatives sampled per positive (Wu et al. 2019)
 BATCH_SIZE = 32
 EPOCHS = 5
-EARLY_STOPPING_PATIENCE = 4  # on validation AUC, matching their callback
+# Callback settings, matching their reproducibility script exactly:
+#   EarlyStopping(monitor="val_auc", mode="max", patience=4, restore_best_weights=True)
+#   ReduceLROnPlateau(monitor="val_auc", mode="max", factor=0.2, patience=2, min_lr=1e-6)
+EARLY_STOPPING_PATIENCE = 4
 LR_PLATEAU_PATIENCE = 2
-LR_PLATEAU_FACTOR = 0.5
+LR_PLATEAU_FACTOR = 0.2
+LR_PLATEAU_MIN_LR = 1e-6
 SEED = 42
 
 # --- per-dataset text encoding -------------------------------------------

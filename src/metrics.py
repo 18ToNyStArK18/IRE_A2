@@ -27,13 +27,24 @@ def _as_arrays(labels, scores) -> tuple[np.ndarray, np.ndarray]:
     return y_true, y_score
 
 
+def _descending_order(y_score: np.ndarray) -> np.ndarray:
+    """Rank order, breaking ties exactly as ebnerd-benchmark does.
+
+    They write `np.argsort(y_pred)[::-1]`; the tempting `np.argsort(-y_pred)`
+    orders tied entries the other way round. That is invisible for a neural
+    ranker's continuous scores, but this harness is shared: the Q2 "before
+    re-ranking" baseline scores integer retrieval ranks, where ties are
+    everywhere and the two conventions give measurably different MRR/nDCG.
+    """
+    return np.argsort(y_score)[::-1]
+
+
 def mrr_score(labels, scores) -> float:
     """Mean reciprocal rank over the positives in one impression, matching
     their implementation: every positive contributes 1/rank, normalised by the
     number of positives (so a multi-click impression is not counted twice)."""
     y_true, y_score = _as_arrays(labels, scores)
-    order = np.argsort(-y_score)
-    ranked = y_true[order]
+    ranked = y_true[_descending_order(y_score)]
     reciprocal = ranked / (np.arange(len(ranked)) + 1)
     total = ranked.sum()
     return float(reciprocal.sum() / total) if total > 0 else 0.0
@@ -41,14 +52,19 @@ def mrr_score(labels, scores) -> float:
 
 def dcg_score(labels, scores, k: int) -> float:
     y_true, y_score = _as_arrays(labels, scores)
-    order = np.argsort(-y_score)[:k]
+    order = _descending_order(y_score)[:k]
     gains = 2 ** y_true[order] - 1
     discounts = np.log2(np.arange(len(order)) + 2)
     return float((gains / discounts).sum())
 
 
 def ndcg_score(labels, scores, k: int) -> float:
-    """DCG@k normalised by the best achievable DCG@k for this impression."""
+    """DCG@k normalised by the best achievable DCG@k for this impression.
+
+    Deviation from theirs, deliberately: an impression with no positive has an
+    ideal DCG of 0, and they divide by it and return nan. We return 0.0, so one
+    degenerate impression cannot turn a whole run's mean into nan.
+    """
     ideal = dcg_score(labels, labels, k)
     if ideal == 0:
         return 0.0

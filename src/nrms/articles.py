@@ -19,6 +19,7 @@ deterministic given (codec, text columns, tokenizer, title_size).
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -90,20 +91,36 @@ def load_tokenizer(model_name: str):
     return AutoTokenizer.from_pretrained(model_name)
 
 
+def token_matrix_fingerprint(model_name: str, text_columns, title_size: int) -> str:
+    """Short hash of everything the matrix contents depend on besides the codec.
+
+    Without this the cache is keyed on title_size alone and validated only by
+    shape -- so swapping TEXT_ENCODER or changing TEXT_COLUMNS silently reuses
+    the old tokenisation, because the shape still matches. Folding those into
+    the filename turns a stale cache into a plain cache miss.
+    """
+    payload = "|".join([model_name, ",".join(text_columns), str(title_size)])
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:10]
+
+
 def load_or_build_token_matrix(
     artifact_dir: Path,
     article_text,
     codec: ArticleCodec,
     tokenizer,
     title_size: int,
+    model_name: str,
+    text_columns,
+    rebuild: bool = False,
 ) -> np.ndarray:
-    path = artifact_dir / f"article_tokens_{title_size}.npy"
-    if path.exists():
+    fingerprint = token_matrix_fingerprint(model_name, text_columns, title_size)
+    path = artifact_dir / f"article_tokens_{title_size}_{fingerprint}.npy"
+    if path.exists() and not rebuild:
         matrix = np.load(path)
         if matrix.shape == (codec.n_articles + 1, title_size):
             return matrix
-        # Catalogue or title_size changed since the cache was written; rebuild
-        # rather than silently indexing into a stale matrix.
+        # Catalogue grew or shrank since the cache was written; rebuild rather
+        # than silently indexing into a stale matrix.
     matrix = build_token_matrix(article_text, codec, tokenizer, title_size)
     path.parent.mkdir(parents=True, exist_ok=True)
     np.save(path, matrix)

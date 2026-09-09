@@ -22,6 +22,9 @@ from src.metrics import evaluate_impressions
 from src.nrms import config as nrms_config
 from src.nrms.dataset import NrmsEvalDataset, eval_collate
 from src.nrms.ids import ArticleCodec
+from src.nrms.tracking import WandbTracker, get_logger
+
+log = get_logger("evaluate")
 
 
 @torch.no_grad()
@@ -66,7 +69,12 @@ def evaluate_split(
     batch_size: int = nrms_config.BATCH_SIZE,
     device: torch.device | None = None,
     num_workers: int = 0,
+    tracker: WandbTracker | None = None,
 ) -> dict:
+    tracker = tracker or WandbTracker(enabled=False)
+    if device is not None and device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
+
     scores = score_split(
         model,
         impressions,
@@ -79,6 +87,12 @@ def evaluate_split(
 
     metrics = evaluate_impressions(labels, scores, ndcg_ks=(5, 10))
     metrics["split"] = split
+    if device is not None and device.type == "cuda":
+        # Eval is the memory-peaky phase: batches are padded to the widest
+        # candidate list they contain, so this is measured separately.
+        metrics["peak_gpu_mib_eval"] = round(
+            torch.cuda.max_memory_allocated(device) / 1024**2, 1
+        )
 
     artifact_dir.mkdir(parents=True, exist_ok=True)
     (artifact_dir / f"metrics_{split}.json").write_text(json.dumps(metrics, indent=2) + "\n")
@@ -95,5 +109,6 @@ def evaluate_split(
         }
     ).to_parquet(artifact_dir / f"predictions_{split}.parquet", index=False)
 
-    print(f"[nrms] {split}: " + json.dumps(metrics))
+    log.info("%s: %s", split, json.dumps(metrics))
+    tracker.set_summary({f"{split}/{k}": v for k, v in metrics.items() if k != "split"})
     return metrics

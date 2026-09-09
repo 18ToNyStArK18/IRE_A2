@@ -59,6 +59,13 @@ def load_impressions(
     example under Wu-2019 sampling, and at evaluation time a group with no
     positive has undefined AUC/MRR/nDCG. Pass drop_no_click=False to inspect
     them.
+
+    NOTE for Q2: this flag defines the impression *population*, so any
+    before/after comparison ("metrics before and after re-ranking") must apply
+    the identical filter on both sides. Score a retrieval baseline over all
+    impressions and the re-ranker over the click-bearing subset and the two
+    numbers are not comparable -- the difference would partly measure which
+    impressions were included, not which ranking is better.
     """
     behaviors = pd.read_parquet(
         processed_dir / f"behaviors_{split}.parquet",

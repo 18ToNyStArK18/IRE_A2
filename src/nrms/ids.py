@@ -77,6 +77,13 @@ def build_article_codec(processed_dir: Path) -> ArticleCodec:
 
     Ids are sorted before numbering so the mapping is deterministic across runs
     and machines; an unordered set would renumber the token matrix each build.
+
+    This scan spans train, val AND test. No labels are read, so it is not the
+    kind of future-click leakage Q9 guards against -- but it is transductive
+    about which article ids exist, which is worth stating given how strictly the
+    rest of the pipeline enforces as-of-time boundaries. Restricting it to train
+    would instead push every val/test-only article onto the shared unknown row,
+    losing the ability to distinguish cold-start articles from each other.
     """
     article_ids: set[str] = set()
 
@@ -100,9 +107,13 @@ def build_article_codec(processed_dir: Path) -> ArticleCodec:
     return ArticleCodec({article_id: code for code, article_id in enumerate(sorted(article_ids), start=1)})
 
 
-def load_or_build_codec(processed_dir: Path, artifact_dir: Path) -> ArticleCodec:
+def load_or_build_codec(
+    processed_dir: Path, artifact_dir: Path, rebuild: bool = False
+) -> ArticleCodec:
+    """Cached codec. Pass rebuild=True after the catalogue changes -- the cache
+    is keyed on the artifact directory alone and cannot detect that itself."""
     path = artifact_dir / "article_id_map.parquet"
-    if path.exists():
+    if path.exists() and not rebuild:
         return ArticleCodec.load(path)
     codec = build_article_codec(processed_dir)
     codec.save(path)

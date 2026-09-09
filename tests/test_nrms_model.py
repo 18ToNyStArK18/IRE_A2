@@ -27,7 +27,7 @@ def embedding_weights():
 
 
 def _model(embedding_weights, dropout=0.0):
-    return NRMS(embedding_weights, HEADS, HEAD_DIM, HIDDEN, dropout, padding_idx=0)
+    return NRMS(embedding_weights, HEADS, HEAD_DIM, HIDDEN, dropout)
 
 
 def test_additive_attention_preserves_input_width():
@@ -59,14 +59,14 @@ def test_self_attention_output_is_heads_times_head_dim():
 
 
 def test_news_encoder_shape(embedding_weights):
-    encoder = NewsEncoder(embedding_weights, HEADS, HEAD_DIM, HIDDEN, 0.0, padding_idx=0)
+    encoder = NewsEncoder(embedding_weights, HEADS, HEAD_DIM, HIDDEN, 0.0)
     tokens = torch.randint(0, VOCAB, (BATCH, TITLE))
     assert encoder(tokens).shape == (BATCH, NEWS_DIM)
     assert encoder.output_dim == NEWS_DIM
 
 
 def test_user_encoder_shape(embedding_weights):
-    news = NewsEncoder(embedding_weights, HEADS, HEAD_DIM, HIDDEN, 0.0, padding_idx=0)
+    news = NewsEncoder(embedding_weights, HEADS, HEAD_DIM, HIDDEN, 0.0)
     user = UserEncoder(news, HEADS, HEAD_DIM, HIDDEN)
     tokens = torch.randint(0, VOCAB, (BATCH, HISTORY, TITLE))
     assert user(tokens).shape == (BATCH, NEWS_DIM)
@@ -121,3 +121,59 @@ def test_backward_reaches_the_embedding(embedding_weights):
 
     grad = model.news_encoder.embedding.weight.grad
     assert grad is not None and torch.isfinite(grad).all() and grad.abs().sum() > 0
+
+
+def test_baseline_trains_every_embedding_row_including_pad(embedding_weights):
+    """Regression for the padding_idx finding: the benchmark's Keras Embedding
+    is trainable end to end, and because NRMS uses no attention masking the pad
+    vector genuinely participates. `from_pretrained(..., padding_idx=k)` would
+    silently pin row k at its pretrained value -- so the baseline must leave
+    padding_idx unset."""
+    model = _model(embedding_weights)
+    assert model.news_encoder.embedding.padding_idx is None
+
+    # every title slot is token 0, the row a padding_idx would have frozen
+    history = torch.zeros(BATCH, HISTORY, TITLE, dtype=torch.long)
+    candidates = torch.zeros(BATCH, CANDIDATES, TITLE, dtype=torch.long)
+    labels = torch.randint(0, CANDIDATES, (BATCH,))
+
+    torch.nn.CrossEntropyLoss()(model(history, candidates), labels).backward()
+    assert model.news_encoder.embedding.weight.grad[0].abs().sum() > 0
+
+
+def test_padding_idx_when_set_freezes_that_row(embedding_weights):
+    """Documents why the option is still exposed, and pins the torch behaviour
+    the finding rests on: padding_idx zeroes the row's gradient, it does not
+    zero the row itself."""
+    model = NRMS(embedding_weights, HEADS, HEAD_DIM, HIDDEN, 0.0, padding_idx=0)
+    embedding = model.news_encoder.embedding
+
+    # the row keeps its pretrained values -- it is not zeroed
+    assert np.allclose(embedding.weight[0].detach().numpy(), embedding_weights[0])
+
+    history = torch.zeros(BATCH, HISTORY, TITLE, dtype=torch.long)
+    candidates = torch.zeros(BATCH, CANDIDATES, TITLE, dtype=torch.long)
+    labels = torch.randint(0, CANDIDATES, (BATCH,))
+    torch.nn.CrossEntropyLoss()(model(history, candidates), labels).backward()
+
+    assert embedding.weight.grad[0].abs().sum() == 0  # frozen, never learns
+
+
+def test_checkpoint_state_dict_preserves_shared_embedding(embedding_weights):
+    """UserEncoder references the same NewsEncoder, so the embedding appears
+    under two keys as one shared tensor. Copying per-entry would materialise it
+    twice, doubling the checkpoint on disk and in host RAM."""
+    from src.nrms.train import _state_dict_to_cpu
+
+    model = _model(embedding_weights)
+    state = _state_dict_to_cpu(model)
+
+    a = state["news_encoder.embedding.weight"]
+    b = state["user_encoder.news_encoder.embedding.weight"]
+    assert a.data_ptr() == b.data_ptr()          # still one storage, not two
+    assert torch.equal(a, b)
+
+    # and it must still load cleanly back into a fresh model
+    fresh = _model(embedding_weights)
+    fresh.load_state_dict(state)
+    assert torch.equal(fresh.news_encoder.embedding.weight, a)

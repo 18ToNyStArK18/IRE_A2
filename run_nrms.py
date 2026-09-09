@@ -18,6 +18,8 @@ TRAIN_FRACTION, for quick end-to-end checks on a new machine.
 from __future__ import annotations
 
 import argparse
+import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -26,6 +28,9 @@ from src.nrms import adapter, articles as article_utils, config as nrms_config, 
 from src.nrms.ids import load_or_build_codec
 from src.nrms.model import NRMS
 from src.nrms.sampling import sampling_strategy_wu2019
+from src.nrms.tracking import WandbTracker, get_logger, setup_logging
+
+log = get_logger("run")
 
 
 def build_everything(args):
@@ -39,16 +44,24 @@ def build_everything(args):
             f"{processed_dir} not found -- run `python build_pipeline.py --dataset {dataset}` first"
         )
 
-    print(f"[nrms] {dataset}: building article id codec")
-    codec = load_or_build_codec(processed_dir, artifact_dir)
-    print(f"[nrms] {dataset}: {codec.n_articles} articles (code 0 reserved for padding)")
+    log.info("%s: building article id codec", dataset)
+    codec = load_or_build_codec(processed_dir, artifact_dir, rebuild=args.rebuild_cache)
+    log.info("%s: %d articles (code 0 reserved for padding)", dataset, codec.n_articles)
 
     model_name = nrms_config.TEXT_ENCODER[dataset]
-    print(f"[nrms] {dataset}: tokenizing article text with {model_name}")
+    text_columns = nrms_config.TEXT_COLUMNS[dataset]
+    log.info("%s: tokenizing article text with %s", dataset, model_name)
     tokenizer = article_utils.load_tokenizer(model_name)
-    article_text = adapter.load_article_text(processed_dir, nrms_config.TEXT_COLUMNS[dataset])
+    article_text = adapter.load_article_text(processed_dir, text_columns)
     token_matrix = article_utils.load_or_build_token_matrix(
-        artifact_dir, article_text, codec, tokenizer, args.title_size
+        artifact_dir,
+        article_text,
+        codec,
+        tokenizer,
+        args.title_size,
+        model_name,
+        text_columns,
+        rebuild=args.rebuild_cache,
     )
 
     return dataset, processed_dir, artifact_dir, codec, tokenizer, token_matrix, model_name
@@ -71,7 +84,21 @@ def main() -> None:
     parser.add_argument("--device", default="auto", help="auto | cpu | cuda")
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--eval-split", choices=["val", "test"], default="test")
+    parser.add_argument("--log-dir", default="log", help="directory for run log files")
+    parser.add_argument("--no-wandb", action="store_true", help="disable Weights & Biases tracking")
+    parser.add_argument("--wandb-project", default="ire-a2-nrms")
+    parser.add_argument("--wandb-run-name", default=None)
+    parser.add_argument(
+        "--rebuild-cache",
+        action="store_true",
+        help="regenerate the article id map and token matrix instead of reusing cached ones",
+    )
     args = parser.parse_args()
+
+    started = time.perf_counter()
+    log_path = setup_logging(args.dataset, Path(args.log_dir))
+    log.info("run log -> %s", log_path)
+    log.info("args: %s", vars(args))
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -87,13 +114,13 @@ def main() -> None:
     ) = build_everything(args)
 
     if args.stage == "prepare":
-        print(f"[nrms] {dataset}: prepared token matrix {token_matrix.shape} -> {artifact_dir}")
+        log.info("%s: prepared token matrix %s -> %s", dataset, token_matrix.shape, artifact_dir)
         return
 
     device = train.resolve_device(args.device)
-    print(f"[nrms] device: {device}")
+    log.info("device: %s", device)
 
-    print(f"[nrms] {dataset}: loading pretrained word embeddings from {model_name}")
+    log.info("%s: loading pretrained word embeddings from %s", dataset, model_name)
     embedding_weights = article_utils.load_word_embeddings(model_name)
     model = NRMS(
         embedding_weights,
@@ -101,10 +128,57 @@ def main() -> None:
         head_dim=nrms_config.HEAD_DIM,
         attention_hidden_dim=nrms_config.ATTENTION_HIDDEN_DIM,
         dropout=nrms_config.DROPOUT,
-        padding_idx=tokenizer.pad_token_id,
+        # padding_idx deliberately unset -- the benchmark trains every embedding
+        # row, and with no attention masking the pad vector does real work. See
+        # NewsEncoder.__init__.
+    )
+
+    n_params = sum(p.numel() for p in model.parameters())
+    n_embedding = model.news_encoder.embedding.weight.numel()
+    log.info(
+        "model: %s params total, %s in the embedding (%.1f%%), %s in attention layers",
+        f"{n_params:,}", f"{n_embedding:,}", 100 * n_embedding / n_params,
+        f"{n_params - n_embedding:,}",
+    )
+
+    tracker = WandbTracker.start(
+        enabled=not args.no_wandb,
+        project=args.wandb_project,
+        run_name=args.wandb_run_name or f"{dataset}-{args.stage}",
+        group=dataset,
+        config={
+            **vars(args),
+            "text_encoder": model_name,
+            "text_columns": list(nrms_config.TEXT_COLUMNS[dataset]),
+            "n_articles": codec.n_articles,
+            "vocab_size": embedding_weights.shape[0],
+            "embedding_dim": embedding_weights.shape[1],
+            "params_total": n_params,
+            "params_embedding": n_embedding,
+            "params_attention": n_params - n_embedding,
+            "head_num": nrms_config.HEAD_NUM,
+            "head_dim": nrms_config.HEAD_DIM,
+            "attention_hidden_dim": nrms_config.ATTENTION_HIDDEN_DIM,
+            "dropout": nrms_config.DROPOUT,
+            "early_stopping_patience": nrms_config.EARLY_STOPPING_PATIENCE,
+            "lr_plateau_factor": nrms_config.LR_PLATEAU_FACTOR,
+            "lr_plateau_patience": nrms_config.LR_PLATEAU_PATIENCE,
+        },
     )
 
     checkpoint_path = artifact_dir / "nrms.pt"
+    try:
+        _run_stages(args, dataset, processed_dir, artifact_dir, codec, token_matrix,
+                    model, device, checkpoint_path, tracker)
+    finally:
+        elapsed = time.perf_counter() - started
+        log.info("total wall time: %.1f min", elapsed / 60)
+        tracker.set_summary({"wall_time_min": round(elapsed / 60, 2), "log_file": str(log_path)})
+        tracker.finish()
+
+
+def _run_stages(args, dataset, processed_dir, artifact_dir, codec, token_matrix,
+                model, device, checkpoint_path, tracker) -> None:
     if args.stage in ("train", "all"):
         train_impressions = adapter.load_impressions(
             processed_dir, "train", codec, args.history_size
@@ -114,16 +188,16 @@ def main() -> None:
                 frac=args.fraction, random_state=args.seed
             ).reset_index(drop=True)
         val_impressions = adapter.load_impressions(processed_dir, "val", codec, args.history_size)
-        print(
-            f"[nrms] {dataset}: {len(train_impressions)} train / "
-            f"{len(val_impressions)} val impressions"
+        log.info(
+            "%s: %d train / %d val impressions",
+            dataset, len(train_impressions), len(val_impressions),
         )
 
         train_samples = sampling_strategy_wu2019(train_impressions, args.npratio, seed=args.seed)
         val_samples = sampling_strategy_wu2019(val_impressions, args.npratio, seed=args.seed)
-        print(
-            f"[nrms] {dataset}: {len(train_samples)} train / {len(val_samples)} val "
-            f"sampled rows (1 positive + {args.npratio} negatives each)"
+        log.info(
+            "%s: %d train / %d val sampled rows (1 positive + %d negatives each)",
+            dataset, len(train_samples), len(val_samples), args.npratio,
         )
 
         train.train_model(
@@ -137,10 +211,11 @@ def main() -> None:
             learning_rate=args.learning_rate,
             device=device,
             num_workers=args.num_workers,
+            tracker=tracker,
         )
     elif checkpoint_path.exists():
         model.load_state_dict(torch.load(checkpoint_path, map_location=device))
-        print(f"[nrms] loaded checkpoint {checkpoint_path}")
+        log.info("loaded checkpoint %s", checkpoint_path)
     else:
         raise SystemExit(f"no checkpoint at {checkpoint_path} -- run --stage train first")
 
@@ -148,7 +223,7 @@ def main() -> None:
         impressions = adapter.load_impressions(
             processed_dir, args.eval_split, codec, args.history_size
         )
-        print(f"[nrms] {dataset}: scoring {len(impressions)} {args.eval_split} impressions")
+        log.info("%s: scoring %d %s impressions", dataset, len(impressions), args.eval_split)
         evaluate.evaluate_split(
             model,
             impressions,
@@ -159,6 +234,7 @@ def main() -> None:
             batch_size=args.batch_size,
             device=device,
             num_workers=args.num_workers,
+            tracker=tracker,
         )
 
 

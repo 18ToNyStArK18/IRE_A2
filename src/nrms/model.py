@@ -43,6 +43,16 @@ class NewsEncoder(nn.Module):
         weights = torch.as_tensor(embedding_weights, dtype=torch.float32)
         # trainable, as in their Embedding(..., trainable=True): the pretrained
         # matrix is an initialisation, not a frozen feature extractor.
+        #
+        # padding_idx defaults to None, and the baseline leaves it that way.
+        # `from_pretrained` does NOT zero that row (it skips reset_parameters
+        # when weights are supplied) -- it only zeroes the row's gradient, which
+        # pins the pad vector at its pretrained value forever. Their Keras
+        # Embedding trains every row, and since we reproduce their absence of
+        # attention masking (see layers.py), pad tokens fill most of the title
+        # slots for short titles and participate fully in attention: that vector
+        # is load-bearing, not inert. Exposed as a parameter so the choice stays
+        # expressible, but do not set it when reproducing the baseline.
         self.embedding = nn.Embedding.from_pretrained(
             weights, freeze=False, padding_idx=padding_idx
         )

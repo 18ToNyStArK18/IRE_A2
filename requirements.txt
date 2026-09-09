@@ -14,5 +14,9 @@ torch>=2.2
 transformers>=4.40
 scikit-learn>=1.4
 
+# --- observability ---
+wandb>=0.17
+python-dotenv>=1.0
+
 # --- dev ---
 pytest>=8.0

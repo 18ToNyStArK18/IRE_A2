@@ -228,3 +228,59 @@ def test_token_matrix_ignores_articles_missing_from_codec():
 
     assert matrix.shape == (2, 4)
     assert list(matrix[1]) == [ord("a"), ord("b"), 0, 0]
+
+
+# ------------------------------------------------- tie-breaking & cache keys
+
+def test_ranking_ties_break_in_the_benchmark_order():
+    """ebnerd-benchmark sorts with np.argsort(y_score)[::-1]; the tempting
+    np.argsort(-y_score) orders tied entries the other way. Invisible for a
+    neural ranker, but this harness also scores integer retrieval ranks where
+    ties are everywhere."""
+    scores = [0.5, 0.5, 0.5]
+    expected = list(np.argsort(np.asarray(scores))[::-1])
+
+    # the positive sits where the benchmark's order puts it first
+    labels = [0, 0, 0]
+    labels[expected[0]] = 1
+    assert mrr_score(labels, scores) == pytest.approx(1.0)
+
+
+def test_ndcg_tie_handling_matches_mrr_tie_handling():
+    scores = [1.0, 1.0]
+    for positive in (0, 1):
+        labels = [0, 0]
+        labels[positive] = 1
+        # both metrics must agree on which tied item is ranked first
+        top_is_positive = mrr_score(labels, scores) == pytest.approx(1.0)
+        assert (ndcg_score(labels, scores, k=2) == pytest.approx(1.0)) == top_is_positive
+
+
+def test_ndcg_returns_zero_not_nan_for_all_negative_impression():
+    """Theirs divides by an ideal DCG of 0 and yields nan, which would poison
+    the mean for a whole run."""
+    value = ndcg_score([0, 0, 0], [0.9, 0.5, 0.1], k=3)
+    assert value == 0.0 and not np.isnan(value)
+
+
+def test_token_matrix_fingerprint_changes_with_encoder():
+    from src.nrms.articles import token_matrix_fingerprint
+
+    a = token_matrix_fingerprint("bert-base-uncased", ("title", "abstract"), 30)
+    b = token_matrix_fingerprint("FacebookAI/xlm-roberta-base", ("title", "abstract"), 30)
+    assert a != b
+
+
+def test_token_matrix_fingerprint_changes_with_text_columns():
+    from src.nrms.articles import token_matrix_fingerprint
+
+    a = token_matrix_fingerprint("bert-base-uncased", ("title", "abstract"), 30)
+    b = token_matrix_fingerprint("bert-base-uncased", ("title", "abstract", "body"), 30)
+    assert a != b
+
+
+def test_token_matrix_fingerprint_is_stable_for_identical_inputs():
+    from src.nrms.articles import token_matrix_fingerprint
+
+    args = ("bert-base-uncased", ("title", "abstract"), 30)
+    assert token_matrix_fingerprint(*args) == token_matrix_fingerprint(*args)
