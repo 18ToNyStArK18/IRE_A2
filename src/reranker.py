@@ -84,12 +84,10 @@ TRAIN_IMPRESSION_CAP = {"mind": 60_000}
 EVAL_CHUNK_IMPRESSIONS = 5_000
 SEED = 42
 # Article stats are taken as-of each row's own time over EVERY earlier event,
-# not Q1's train-only default. Frozen end-of-train counts read zero for the fresh
-# articles actually clicked at test time -- a train/serve skew that put the first
-# `popular` run 18-21% below stage 1 on val/test (see article_stats module
-# docstring). Still strictly before t, with the same click reporting lag as the
-# fresh pool.
-ARTICLE_STATS_SPLITS = ("train", "val", "test")
+# not Q1's train-only default -- see config.ARTICLE_STATS_SPLITS, which the NRMS
+# freshness arm reads too. Still strictly before t, with the same click
+# reporting lag as the fresh pool.
+ARTICLE_STATS_SPLITS = config.ARTICLE_STATS_SPLITS
 
 
 def _article_index(processed_dir, dataset: str):

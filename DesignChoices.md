@@ -824,10 +824,11 @@ the dot-product scorer that *defines* NRMS untouched, so the arm isolates "does
 knowing article age help" rather than also changing how the two representations
 interact.
 
-Reference times come from `article_stats.freshness_reference_times`, the same
-definition the re-ranker uses — EB-NeRD's real `published_time`, MIND's earliest
-recorded sighting. A test asserts it agrees with `TrainEventIndex.as_of`, so the
-two models cannot drift into different notions of "age".
+Reference times come from `article_stats.freshness_reference_times` —
+EB-NeRD's real `published_time`, MIND's earliest recorded sighting — over
+`config.ARTICLE_STATS_SPLITS`, the same splits the re-ranker's `TrainEventIndex`
+uses. *(Corrected 2026-09-11: as first committed this was true for EB-NeRD
+only; MIND used train-only sightings. See "Corrections after review" below.)*
 
 ### Three properties that protect the ablation's validity
 
@@ -885,6 +886,68 @@ while the existing baseline path stays backwards compatible. Shared caches
   variance. If the effect is small, run seeds 42/43/44 at least on EB-NeRD
   (~23 min each) so the gain can be told apart from seed noise.
 
+### Corrections after review (2026-09-11)
+
+A review of the first commit found two real bugs, both verified independently
+before fixing.
+
+**1. MIND dated almost none of its test candidates.** `FreshnessLookup.build`
+defaulted to train-only sightings, while the re-ranker already used every split.
+On MIND — whose reference is "first time shown" — any article first appearing
+after the train period had no age at all. Measured on 5,000-impression samples:
+
+| split | reference from | candidates with an age | clicks with an age |
+|---|---|---|---|
+| train | train only | 99.6% | 99.6% |
+| val | train only | 90.4% | 88.8% |
+| test | train only | **25.1%** | **17.4%** |
+| test | all splits | 99.9% | 99.9% |
+
+Three reasons this mattered more than a coverage gap:
+
+- It is the §2E bug 1 pattern again — train/serve skew. The head would learn age
+  on 99.6% dated candidates and be tested where 75% are undated, with the
+  (fresh) clicked articles hit hardest.
+- **The equivalence test was vacuous.** It compared the two functions' train-only
+  *defaults*, so it passed while the property it guarded — "same definition as
+  the re-ranker" — was false for MIND.
+- **The §2F prediction would have come true for the wrong reason.** "MIND gains
+  less because first-seen is a noisy proxy" is exactly what this bug produces on
+  its own, and it would have been misattributed. And because val is only mildly
+  affected (90%), early stopping would have looked healthy — nothing during
+  training would have flagged it.
+
+Fix: the splits tuple moved from `reranker.py` to `config.ARTICLE_STATS_SPLITS`,
+and both the re-ranker and `FreshnessLookup.build` (as its default) read it. The
+root cause was that the tuple lived where the NRMS path could not see it; with one
+constant the "same definition" claim is structurally true rather than something a
+test has to keep catching. The equivalence test now reads that constant on both
+sides. Leak-free: `ages()` only uses a reference strictly before the impression.
+EB-NeRD is unaffected (its reference is `published_time`).
+
+**2. The two arms trained on different data orders.** Validity property 1 above
+claimed the arm "can only depart from the baseline by learning". That was
+overstated: conditional, last-position construction kept every other parameter's
+init identical, but the head's own init still drew from torch's global generator,
+and the next readers of that generator are the DataLoader's shuffle seed and CPU
+dropout. With the same `torch.manual_seed(42)` the shuffle seeds differed
+(`7773910853395796049` vs `5950622100989377681`), so a gain would have been mixed
+with seed noise — decisive with one seed per arm and a small effect. Negative
+sampling was unaffected (it uses its own seeded numpy generator).
+
+Fix: the head is built inside `torch.random.fork_rng(devices=[])`, so it consumes
+nothing from the global generator; both arms now draw identical shuffle seeds.
+CPU-only forking is sufficient because construction runs on CPU and GPU dropout
+uses the CUDA generator. Two tests assert the generator state and shuffle seed
+match across arms.
+
+Also corrected: the head is **65** parameters, not the "~50" the code comments
+said.
+
+**Run order after these fixes:** both arms are valid on both datasets. Before
+them, only EB-NeRD's age signal was sound, and neither dataset had matched data
+order.
+
 ---
 
 ## 3. Open decisions
@@ -936,3 +999,11 @@ while the existing baseline path stays backwards compatible. Shared caches
   the ablation valid (zero-init head, conditional construction to preserve the
   baseline's RNG stream, ~65 parameters) and the as-of gate that keeps the age
   signal leak-free. Tested, not yet trained. Q3-improvement decision closed.
+- **2026-09-11** — §2F "Corrections after review": fixed two verified bugs in the
+  freshness arm. (1) MIND dated only 25% of test candidates (17% of clicks)
+  because the reference used train-only sightings; the splits tuple moved to
+  `config.ARTICLE_STATS_SPLITS`, shared by the re-ranker and `FreshnessLookup`,
+  and the vacuous equivalence test now checks the splits actually in use.
+  (2) The arms trained on different data orders because the head's init consumed
+  the global RNG; it is now built under `fork_rng`. Head parameter count
+  corrected to 65.

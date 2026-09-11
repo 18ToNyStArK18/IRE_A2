@@ -127,3 +127,14 @@ CLICK_REPORTING_LAG_MINUTES = 10  # clicks land after their impression, so recen
                                   # impressions' clicks may not exist yet at t
                                   # (Q9). Costs 0pp EB-NeRD / ~1pp MIND at @200;
                                   # a 30-min lag would cost MIND ~4pp
+
+# Behaviour logs that feed as-of-time article statistics, for BOTH the re-ranker
+# (article_stats.TrainEventIndex) and the NRMS freshness arm (FreshnessLookup).
+# Every split, not Q1's train-only default: frozen end-of-train statistics are
+# missing for the fresh articles actually shown at test time -- a train/serve
+# skew that put the first `popular` re-ranker 18-21% below stage 1, and that left
+# MIND's NRMS freshness arm with an age for only 25% of test candidates (17% of
+# test clicks). Leak-free, because every consumer only uses events strictly
+# before the impression being scored. Lives here rather than in either consumer
+# so the two cannot drift into different definitions of "age".
+ARTICLE_STATS_SPLITS = ("train", "val", "test")

@@ -117,8 +117,8 @@ class FreshnessHead(nn.Module):
     comparison clean -- and it is why the flag cannot accidentally look like an
     improvement simply from perturbed initialisation.
 
-    ~50 parameters against ~192M in the XLM-R embedding matrix, so a gain here
-    cannot be dismissed as added capacity.
+    65 parameters (2x16 + 16 + 16x1 + 1) against ~192M in the XLM-R embedding
+    matrix, so a gain here cannot be dismissed as added capacity.
     """
 
     def __init__(self, hidden_dim: int):
@@ -157,11 +157,23 @@ class NRMS(nn.Module):
         )
         self.output_dim = self.news_encoder.output_dim
 
-        # Constructed only when enabled, and last: building it unconditionally
-        # would draw from the RNG even when disabled, shifting every subsequent
-        # parameter's initialisation and quietly stopping the baseline arm from
-        # reproducing the baseline runs it is being compared against.
-        self.freshness_head = FreshnessHead(freshness_hidden_dim) if freshness else None
+        # Constructed only when enabled, last, and inside a forked RNG.
+        #
+        # Only-when-enabled and last keep every other parameter's initialisation
+        # identical to the baseline's. But that alone is not enough: the head's
+        # own init would still draw from torch's global generator, and what reads
+        # that generator next is the DataLoader's shuffle seed and CPU dropout.
+        # The two arms would then see the training data in a different order, and
+        # a measured gain would be mixed with seed noise. The fork means building
+        # the head consumes nothing from the global generator.
+        #
+        # devices=[] forks only the CPU generator, which is sufficient:
+        # construction happens on CPU, and GPU dropout draws from the CUDA
+        # generator, which construction never touches.
+        self.freshness_head = None
+        if freshness:
+            with torch.random.fork_rng(devices=[]):
+                self.freshness_head = FreshnessHead(freshness_hidden_dim)
 
     def forward(
         self,

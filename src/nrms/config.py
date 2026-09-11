@@ -36,8 +36,8 @@ LR_PLATEAU_MIN_LR = 1e-6
 SEED = 42
 
 # Q3 freshness arm (src/nrms/freshness.py). Deliberately tiny: the head is
-# ~50 parameters against ~192M in the embedding matrix, so a gain from it
-# cannot be attributed to added capacity.
+# 65 parameters (2x16 + 16 + 16x1 + 1) against ~192M in the embedding matrix,
+# so a gain from it cannot be attributed to added capacity.
 FRESHNESS_HIDDEN_DIM = 16
 
 # --- per-dataset text encoding -------------------------------------------

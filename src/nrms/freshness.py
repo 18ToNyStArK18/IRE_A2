@@ -27,7 +27,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from src import article_stats
+from src import article_stats, config
 from src.nrms.ids import ArticleCodec
 
 _NS_PER_HOUR = 3.6e12
@@ -40,7 +40,16 @@ class FreshnessLookup:
         self.reference_ns = np.asarray(reference_ns, dtype=np.float64)
 
     @classmethod
-    def build(cls, processed_dir, dataset: str, codec: ArticleCodec, splits=("train",)) -> "FreshnessLookup":
+    def build(
+        cls, processed_dir, dataset: str, codec: ArticleCodec, splits=config.ARTICLE_STATS_SPLITS
+    ) -> "FreshnessLookup":
+        """Defaults to config.ARTICLE_STATS_SPLITS, the splits the re-ranker's
+        article statistics use. Matters for MIND only (EB-NeRD's reference is
+        `published_time`): with train-only sightings, articles that first appear
+        after the train period have no age, leaving just 25% of test candidates
+        and 17% of test clicks dated while train sits at 99.6% -- the head would
+        learn a signal it then cannot apply. ages()'s strict as-of gate keeps a
+        val/test sighting from dating any impression that precedes it."""
         references = article_stats.freshness_reference_times(processed_dir, dataset, splits)
         reference_ns = np.full(codec.n_articles + 1, np.nan, dtype=np.float64)
         for article_id, timestamp in references.items():

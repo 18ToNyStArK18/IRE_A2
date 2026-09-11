@@ -94,6 +94,36 @@ def test_freshness_head_is_negligible_capacity():
     assert head_params / (250_002 * 768) < 1e-6
 
 
+def _build_after_seed(freshness: bool, seed: int = 42):
+    torch.manual_seed(seed)
+    weights = np.random.default_rng(seed).normal(size=(12, 8)).astype(np.float32)
+    return NRMS(
+        weights, num_heads=2, head_dim=4, attention_hidden_dim=6, dropout=0.2,
+        freshness=freshness, freshness_hidden_dim=4,
+    )
+
+
+def test_flag_leaves_the_global_rng_in_the_same_state():
+    """What reads torch's generator after the model is built -- the DataLoader's
+    shuffle seed, CPU dropout -- must be identical across arms, or they train on
+    different data orders and a gain is confounded with seed noise."""
+    _build_after_seed(freshness=False)
+    after_baseline = torch.get_rng_state()
+    _build_after_seed(freshness=True)
+    after_freshness = torch.get_rng_state()
+    assert torch.equal(after_baseline, after_freshness)
+
+
+def test_both_arms_draw_the_same_shuffle_seed():
+    """The concrete consequence: RandomSampler seeds itself from one int64 draw
+    on the global generator."""
+    def shuffle_seed(freshness):
+        _build_after_seed(freshness)
+        return int(torch.empty((), dtype=torch.int64).random_().item())
+
+    assert shuffle_seed(False) == shuffle_seed(True)
+
+
 def test_head_changes_logits_once_trained():
     """A non-zero head must actually move the scores, otherwise the arm could
     never differ from the baseline at all."""
@@ -170,16 +200,22 @@ def test_zeros_path_matches_shape():
 def test_reference_times_agree_with_train_event_index(dataset):
     """freshness_reference_times duplicates TrainEventIndex's notion of a
     reference time for speed; if the two ever diverge, the NRMS arm and the
-    re-ranker would be using different definitions of 'age'."""
+    re-ranker would be using different definitions of 'age'.
+
+    Both sides read config.ARTICLE_STATS_SPLITS -- the splits the re-ranker and
+    FreshnessLookup actually use. An earlier version compared the two functions'
+    train-only DEFAULTS, so it passed while the property it existed to guard was
+    false for MIND: the re-ranker used every split and NRMS used train only."""
     processed_dir = PROCESSED_DIRS[dataset]
     if not processed_dir.exists():
         pytest.skip(f"{dataset} not built")
 
-    references = article_stats.freshness_reference_times(processed_dir, dataset)
+    splits = config.ARTICLE_STATS_SPLITS
+    references = article_stats.freshness_reference_times(processed_dir, dataset, splits)
     if not references:
         pytest.skip("no reference times available")
 
-    index = article_stats.TrainEventIndex(processed_dir, dataset)
+    index = article_stats.TrainEventIndex(processed_dir, dataset, splits=splits)
     far_future = pd.Timestamp("2100-01-01")
 
     sample = list(references.items())[:200]
