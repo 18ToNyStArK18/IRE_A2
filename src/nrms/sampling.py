@@ -27,12 +27,16 @@ def sampling_strategy_wu2019(
     """Expand impressions into one row per positive click.
 
     Expects the frame from adapter.load_impressions. Returns columns:
-    impression_id, history, candidates (int32[npratio+1]), label (int index of
-    the positive within `candidates`).
+    impression_id, time, history, candidates (int32[npratio+1]), label (int
+    index of the positive within `candidates`).
+
+    `time` is carried through because article age is a property of the
+    (impression, candidate) pair, not of the article: the freshness arm needs
+    each training row's own impression time to date its candidates against.
     """
     rng = np.random.default_rng(seed)
 
-    impression_ids, histories, candidate_sets, labels = [], [], [], []
+    impression_ids, times, histories, candidate_sets, labels = [], [], [], [], []
     for row in impressions.itertuples(index=False):
         candidates = np.asarray(row.candidates, dtype=np.int32)
         row_labels = np.asarray(row.labels, dtype=np.int8)
@@ -47,6 +51,7 @@ def sampling_strategy_wu2019(
             group = np.concatenate(([positive], sampled)).astype(np.int32)
             order = rng.permutation(npratio + 1)
             impression_ids.append(row.impression_id)
+            times.append(row.time)
             histories.append(row.history)
             candidate_sets.append(group[order])
             labels.append(int(np.argmax(order == 0)))
@@ -54,6 +59,7 @@ def sampling_strategy_wu2019(
     return pd.DataFrame(
         {
             "impression_id": impression_ids,
+            "time": times,
             "history": histories,
             "candidates": candidate_sets,
             "label": np.asarray(labels, dtype=np.int64),

@@ -63,6 +63,9 @@ def _impressions() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "impression_id": ["i1", "i2"],
+            # adapter.load_impressions always emits `time`; sampling carries it
+            # through so the freshness arm can date each row's candidates.
+            "time": pd.to_datetime(["2023-05-20T10:00:00", "2023-05-20T11:00:00"]),
             "history": [np.array([1, 2], dtype=np.int32), np.array([3, 0], dtype=np.int32)],
             "candidates": [
                 np.array([10, 11, 12, 13], dtype=np.int32),

@@ -66,6 +66,45 @@ from src import config
 _EMPTY_TIMES = np.empty(0, dtype=np.int64)
 
 
+def freshness_reference_times(processed_dir, dataset: str, splits=("train",)) -> dict[str, pd.Timestamp]:
+    """Per-article freshness reference, by the same definition
+    TrainEventIndex.as_of applies: EB-NeRD's real `published_time`, and for MIND
+    -- which ships no publish date -- the earliest time the article was shown as
+    a candidate anywhere in `splits`.
+
+    Returned UNGATED. A reference only becomes usable for a particular
+    impression once it precedes that impression's own time; as_of() applies that
+    gate internally, so callers of this function must apply it themselves.
+    tests/test_freshness.py asserts the two definitions agree.
+
+    Separate from TrainEventIndex because the NRMS freshness arm needs one
+    reference per catalogue article, not a per-query lookup, and building the
+    full sorted event index to read a single value per article would scan 5.84M
+    events on MIND for nothing.
+    """
+    if dataset == "ebnerd":
+        articles = pd.read_parquet(
+            processed_dir / "articles.parquet", columns=["article_id", "published_time"]
+        )
+        return {
+            article_id: published
+            for article_id, published in zip(articles["article_id"], articles["published_time"])
+            if not pd.isna(published)
+        }
+
+    first_seen: dict[str, pd.Timestamp] = {}
+    for split in splits:
+        frame = pd.read_parquet(
+            processed_dir / f"behaviors_{split}.parquet", columns=["time", "candidates"]
+        )
+        for t, candidates in zip(frame["time"], frame["candidates"]):
+            for article_id in candidates:
+                previous = first_seen.get(article_id)
+                if previous is None or t < previous:
+                    first_seen[article_id] = t
+    return first_seen
+
+
 class TrainEventIndex:
     def __init__(self, processed_dir, dataset: str, splits=("train",), click_lag_minutes: float = 0.0):
         """`splits` chooses which behaviour logs feed the index and

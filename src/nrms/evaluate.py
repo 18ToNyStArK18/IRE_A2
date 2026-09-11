@@ -36,13 +36,14 @@ def score_split(
     batch_size: int = nrms_config.BATCH_SIZE,
     device: torch.device | None = None,
     num_workers: int = 0,
+    freshness=None,
 ) -> list[np.ndarray]:
     """Per-impression score arrays, aligned with `impressions` row order."""
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device).eval()
 
     loader = DataLoader(
-        NrmsEvalDataset(impressions, token_matrix),
+        NrmsEvalDataset(impressions, token_matrix, freshness),
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
@@ -50,8 +51,13 @@ def score_split(
     )
 
     scores: list[np.ndarray | None] = [None] * len(impressions)
-    for history, candidates, _labels, mask, indices in loader:
-        logits = model(history.to(device), candidates.to(device)).float().cpu().numpy()
+    for history, candidates, _labels, mask, indices, log_age, known in loader:
+        logits = (
+            model(history.to(device), candidates.to(device), log_age.to(device), known.to(device))
+            .float()
+            .cpu()
+            .numpy()
+        )
         mask = mask.numpy()
         for row, index in enumerate(indices.numpy()):
             scores[int(index)] = logits[row][mask[row]]
@@ -70,6 +76,7 @@ def evaluate_split(
     device: torch.device | None = None,
     num_workers: int = 0,
     tracker: WandbTracker | None = None,
+    freshness=None,
 ) -> dict:
     tracker = tracker or WandbTracker(enabled=False)
     if device is not None and device.type == "cuda":
@@ -82,6 +89,7 @@ def evaluate_split(
         batch_size=batch_size,
         device=device,
         num_workers=num_workers,
+        freshness=freshness,
     )
     labels = [np.asarray(l, dtype=np.float32) for l in impressions["labels"]]
 

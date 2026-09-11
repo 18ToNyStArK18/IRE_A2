@@ -35,6 +35,11 @@ LR_PLATEAU_FACTOR = 0.2
 LR_PLATEAU_MIN_LR = 1e-6
 SEED = 42
 
+# Q3 freshness arm (src/nrms/freshness.py). Deliberately tiny: the head is
+# ~50 parameters against ~192M in the embedding matrix, so a gain from it
+# cannot be attributed to added capacity.
+FRESHNESS_HIDDEN_DIM = 16
+
 # --- per-dataset text encoding -------------------------------------------
 # EB-NeRD is Danish, so the benchmark uses multilingual XLM-RoBERTa. MIND is
 # English and already has a monolingual choice recorded in src/config.py.

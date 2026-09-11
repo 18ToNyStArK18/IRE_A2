@@ -771,6 +771,122 @@ Against the catalogue pipeline (§2D), MRR goes 0.0182 → **0.2102** on EB-NeRD
 
 ---
 
+## 2F. Q3 improvement: freshness weighting for NRMS (2026-09-11)
+
+Implemented, tested, **not yet trained** — training runs on a separate machine.
+
+### Why freshness, over the two alternatives considered
+
+The proposal on the table was **positional encoding** on the user encoder.
+NRMS is permutation-invariant in two places, and the distinction matters:
+
+1. **Word level** — `NewsEncoder` self-attends over 30 title tokens, so
+   "dog bites man" ≡ "man bites dog".
+2. **History level** — `UserEncoder` self-attends over 20 clicked-article
+   vectors, so the most recent click is treated identically to the oldest.
+
+Measured history occupancy, test split, at `HISTORY_SIZE = 20`:
+
+| | MIND | EB-NeRD |
+|---|---|---|
+| impressions with <20 clicks | **51.1%** | 4.3% |
+| mean PAD slots (of 20) | **5.9 → 29.4% of the input** | 0.4 → 1.8% |
+| median history length | 19 | 226 |
+
+That rules positional encoding out as a *primary* arm: on MIND, 29.4% of the
+history slots are padding occupying positions 0…k, and `layers.py` does no
+masking, so PE would be attaching position embeddings to padding. **PE and
+masking are complementary, and PE without masking is compromised on exactly the
+dataset where padding dominates.**
+
+Freshness was chosen instead on a **category** difference rather than a
+magnitude one: the padding problem is something the additive attention can
+partly learn around (the pad vector is constant, so attention can down-weight
+it), whereas **article age is not in NRMS's input at all** — it cannot be
+learned from title tokens at any amount of training. Adding a channel the model
+structurally lacks is a surer bet than fixing one it can partly compensate for.
+
+The supporting evidence is all in-project: the Q2 re-ranker put **80–87%** of
+its gain on `freshness_log_hours` for EB-NeRD (§2B/§2D), and §2E measured a
+median clicked-article age at click time of **3.1 hours**. "Freshness weighting"
+is also on the A2 doc's own list of suggested improvements.
+
+Ranked, for the record: freshness > attention masking (zero new parameters, big
+on MIND, negligible on EB-NeRD) > positional encoding.
+
+### Design
+
+`score = dot(user_vector, candidate_vector) + g(log1p(age_hours), known)`, with
+`g` a 2→16→1 MLP (`FreshnessHead`).
+
+Additive on the **logit**, not concatenated into the news vector: that leaves
+the dot-product scorer that *defines* NRMS untouched, so the arm isolates "does
+knowing article age help" rather than also changing how the two representations
+interact.
+
+Reference times come from `article_stats.freshness_reference_times`, the same
+definition the re-ranker uses — EB-NeRD's real `published_time`, MIND's earliest
+recorded sighting. A test asserts it agrees with `TrainEventIndex.as_of`, so the
+two models cannot drift into different notions of "age".
+
+### Three properties that protect the ablation's validity
+
+1. **The head is zero-initialised**, so at step 0 its output is exactly 0 and the
+   arm's logits are bit-identical to the baseline's. The arm can only depart from
+   the baseline by learning — a measured gain can never be an artefact of a
+   different initialisation.
+2. **The head is constructed only when the flag is set.** Building it
+   unconditionally would draw from the RNG even when disabled, shifting every
+   subsequent parameter's initialisation and silently stopping the baseline arm
+   from reproducing the §2C runs it is compared against.
+3. **~65 parameters** against ~192M in the embedding matrix (<1e-6). No gain can
+   be attributed to added capacity.
+
+All three are tested (`tests/test_freshness.py`).
+
+### Leakage (Q9)
+
+The as-of gate is in `ages()`: a reference counts only when it **strictly
+precedes** the impression being scored. An article whose first recorded sighting
+falls *after* that impression reads `known=0`, never age-zero — clamping it to
+zero would tell the model "brand new" about something we simply had not seen
+yet, which is the same failure the re-ranker's freshness proxy was fixed for.
+`PAD_CODE` has no reference by construction, so padded slots are always unknown.
+
+### CLI
+
+```bash
+python run_nrms.py --dataset ebnerd --stage all                   # baseline, path unchanged
+python run_nrms.py --dataset ebnerd --stage all --freshness       # -> nrms/freshness/
+python run_nrms.py --dataset ebnerd --stage all --seed 43 --run-tag freshness_s43
+```
+
+`--run-tag` defaults to `freshness` when `--freshness` is set and to the
+artifact root otherwise, so an arm can never silently overwrite the baseline
+while the existing baseline path stays backwards compatible. Shared caches
+(codec, token matrix) stay at the artifact root and are reused across arms.
+
+### Verified on real data, EB-NeRD val
+
+- reference time known for **11,777 / 11,777** catalogue articles (100%)
+- candidate age: **median 2.2 h, p90 3,344 h** — a ~1,500x spread the baseline
+  cannot represent at all
+- both arms train and evaluate end to end on CPU; the head's weights move, so
+  gradients reach it
+
+### Predictions to check against when the runs land
+
+- **Expect an asymmetry.** EB-NeRD has a real `published_time`; MIND has only the
+  first-seen proxy, so a weaker and noisier result there is the prediction, not a
+  bug — and it would mirror §2D's Finding 3 exactly, giving one coherent story
+  across both models.
+- **One seed per arm will not settle a small gain.** A paired bootstrap resamples
+  test *impressions* with both models held fixed; it says nothing about training
+  variance. If the effect is small, run seeds 42/43/44 at least on EB-NeRD
+  (~23 min each) so the gain can be told apart from seed noise.
+
+---
+
 ## 3. Open decisions
 
 - [x] ~~Sign-off on §1.4 (LambdaMART primary) and §2.6 (no cross-encoder).~~
@@ -783,9 +899,13 @@ Against the catalogue pipeline (§2D), MRR goes 0.0182 → **0.2102** on EB-NeRD
       chunked and exact.
 - [x] ~~Which candidate source feeds the re-ranker.~~ **Resolved 2026-09-11**:
       `popular` (§2E). `bm25` and `bm25_fresh` stay as stage-1 ablation arms.
-- [ ] Whether the Q3 "principled improvement" is the loss-function change
-      (pointwise → LambdaMART) or the bi-encoder feature. Either works; they
-      should not be conflated into one ablation arm.
+- [x] ~~Whether the Q3 "principled improvement" is the loss-function change or
+      the bi-encoder feature.~~ **Resolved 2026-09-11** (§2F): neither — the Q3
+      improvement is **freshness weighting on NRMS**, which improves the actual
+      baseline rather than the re-ranker, so "reproduce then beat it" compares
+      like with like.
+- [ ] Run the §2F arms (separate machine) and decide on seed count: one seed per
+      arm cannot separate a small gain from seed noise.
 - [ ] Paired bootstrap 95% CIs for the §2E before/after deltas.
 - [ ] The Q1 feature-group ablation under the chosen random-negative sampling
       (§2E's candidate-level-only arm ran under the discarded hard negatives).
@@ -809,3 +929,10 @@ Against the catalogue pipeline (§2D), MRR goes 0.0182 → **0.2102** on EB-NeRD
 - **2026-09-11** — Added the "Current state" block and dated supersession notes to
   §0, §0.1, §1.3, §1.5, §2.3, §2B and §2D Finding 3 where §2E overturned their
   premises; marked the lightgbm requirement done.
+- **2026-09-11** — Added §2F: freshness weighting implemented as the Q3
+  improvement, behind `--freshness`. Chose it over the proposed positional
+  encoding after measuring that 29.4% of MIND's history slots are padding, which
+  makes PE unsound there without masking. Records the three properties that keep
+  the ablation valid (zero-init head, conditional construction to preserve the
+  baseline's RNG stream, ~65 parameters) and the as-of gate that keeps the age
+  signal leak-free. Tested, not yet trained. Q3-improvement decision closed.

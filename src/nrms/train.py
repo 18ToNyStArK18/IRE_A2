@@ -93,12 +93,12 @@ def _validate(model, loader, device, criterion) -> tuple[float, float]:
     model.eval()
     losses, all_logits, all_labels = [], [], []
     n_rows = 0
-    for history, candidates, labels in loader:
+    for history, candidates, labels, log_age, known in loader:
         history = history.to(device)
         candidates = candidates.to(device)
         labels = labels.to(device)
 
-        logits = model(history, candidates)
+        logits = model(history, candidates, log_age.to(device), known.to(device))
         # Weighted by batch size: a short final batch must not count as much as
         # a full one in the reported loss.
         losses.append(criterion(logits, labels).item() * len(labels))
@@ -126,20 +126,21 @@ def train_model(
     device: torch.device | None = None,
     num_workers: int = 0,
     tracker: WandbTracker | None = None,
+    freshness=None,
 ) -> dict:
     device = device or resolve_device()
     tracker = tracker or WandbTracker(enabled=False)
     model = model.to(device)
 
     train_loader = DataLoader(
-        NrmsTrainDataset(train_samples, token_matrix),
+        NrmsTrainDataset(train_samples, token_matrix, freshness),
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
         drop_last=False,
     )
     val_loader = DataLoader(
-        NrmsTrainDataset(val_samples, token_matrix),
+        NrmsTrainDataset(val_samples, token_matrix, freshness),
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
@@ -170,13 +171,15 @@ def train_model(
         epoch_started = time.perf_counter()
         model.train()
         epoch_losses = []
-        for batch_history, batch_candidates, batch_labels in train_loader:
+        for batch_history, batch_candidates, batch_labels, batch_log_age, batch_known in train_loader:
             batch_history = batch_history.to(device)
             batch_candidates = batch_candidates.to(device)
             batch_labels = batch_labels.to(device)
 
             optimizer.zero_grad(set_to_none=True)
-            logits = model(batch_history, batch_candidates)
+            logits = model(
+                batch_history, batch_candidates, batch_log_age.to(device), batch_known.to(device)
+            )
             loss = criterion(logits, batch_labels)
             loss.backward()
             optimizer.step()

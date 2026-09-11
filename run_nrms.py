@@ -26,6 +26,7 @@ import torch
 
 from src.nrms import adapter, articles as article_utils, config as nrms_config, evaluate, train
 from src.nrms.ids import load_or_build_codec
+from src.nrms.freshness import FreshnessLookup
 from src.nrms.model import NRMS
 from src.nrms.sampling import sampling_strategy_wu2019
 from src.nrms.tracking import WandbTracker, get_logger, setup_logging
@@ -89,6 +90,18 @@ def main() -> None:
     parser.add_argument("--wandb-project", default="ire-a2-nrms")
     parser.add_argument("--wandb-run-name", default=None)
     parser.add_argument(
+        "--freshness",
+        action="store_true",
+        help="Q3 arm: give the scorer an article-age signal (see src/nrms/freshness.py)",
+    )
+    parser.add_argument(
+        "--run-tag",
+        default=None,
+        help="subdirectory under the artifact dir for this run's checkpoint/metrics. "
+             "Defaults to 'freshness' when --freshness is set, else the artifact dir "
+             "root, so an ablation arm can never silently overwrite the baseline.",
+    )
+    parser.add_argument(
         "--rebuild-cache",
         action="store_true",
         help="regenerate the article id map and token matrix instead of reusing cached ones",
@@ -131,7 +144,18 @@ def main() -> None:
         # padding_idx deliberately unset -- the benchmark trains every embedding
         # row, and with no attention masking the pad vector does real work. See
         # NewsEncoder.__init__.
+        freshness=args.freshness,
+        freshness_hidden_dim=nrms_config.FRESHNESS_HIDDEN_DIM,
     )
+
+    freshness_lookup = None
+    if args.freshness:
+        freshness_lookup = FreshnessLookup.build(processed_dir, dataset, codec)
+        n_known = int(np.isfinite(freshness_lookup.reference_ns[1:]).sum())
+        log.info(
+            "freshness: reference time known for %s/%s catalogue articles (%.1f%%)",
+            f"{n_known:,}", f"{codec.n_articles:,}", 100 * n_known / max(codec.n_articles, 1),
+        )
 
     n_params = sum(p.numel() for p in model.parameters())
     n_embedding = model.news_encoder.embedding.weight.numel()
@@ -166,10 +190,18 @@ def main() -> None:
         },
     )
 
-    checkpoint_path = artifact_dir / "nrms.pt"
+    # Shared caches (codec, token matrix) stay in artifact_dir so arms reuse
+    # them; per-arm outputs go under run_dir so a second arm cannot overwrite
+    # the first's checkpoint and metrics.
+    tag = args.run_tag or ("freshness" if args.freshness else None)
+    run_dir = artifact_dir / tag if tag else artifact_dir
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log.info("run artifacts -> %s", run_dir)
+
+    checkpoint_path = run_dir / "nrms.pt"
     try:
-        _run_stages(args, dataset, processed_dir, artifact_dir, codec, token_matrix,
-                    model, device, checkpoint_path, tracker)
+        _run_stages(args, dataset, processed_dir, run_dir, codec, token_matrix,
+                    model, device, checkpoint_path, tracker, freshness_lookup)
     finally:
         elapsed = time.perf_counter() - started
         log.info("total wall time: %.1f min", elapsed / 60)
@@ -178,7 +210,7 @@ def main() -> None:
 
 
 def _run_stages(args, dataset, processed_dir, artifact_dir, codec, token_matrix,
-                model, device, checkpoint_path, tracker) -> None:
+                model, device, checkpoint_path, tracker, freshness_lookup) -> None:
     if args.stage in ("train", "all"):
         train_impressions = adapter.load_impressions(
             processed_dir, "train", codec, args.history_size
@@ -212,6 +244,7 @@ def _run_stages(args, dataset, processed_dir, artifact_dir, codec, token_matrix,
             device=device,
             num_workers=args.num_workers,
             tracker=tracker,
+            freshness=freshness_lookup,
         )
     elif checkpoint_path.exists():
         model.load_state_dict(torch.load(checkpoint_path, map_location=device))
@@ -235,6 +268,7 @@ def _run_stages(args, dataset, processed_dir, artifact_dir, codec, token_matrix,
             device=device,
             num_workers=args.num_workers,
             tracker=tracker,
+            freshness=freshness_lookup,
         )
 
 

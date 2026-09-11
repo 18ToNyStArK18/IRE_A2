@@ -103,6 +103,39 @@ class UserEncoder(nn.Module):
         return self.additive_attention(attended)
 
 
+class FreshnessHead(nn.Module):
+    """(log1p(age_hours), known) -> an additive adjustment to the logit.
+
+    Deliberately additive on the logit rather than concatenated into the news
+    vector: it keeps the dot-product scorer that defines NRMS untouched, so the
+    ablation isolates "does knowing article age help" rather than also changing
+    how the user and candidate representations interact.
+
+    The output layer is zero-initialised, so at step 0 the adjustment is exactly
+    0 and the model's logits are bit-identical to the baseline's. The arm can
+    only depart from the baseline by learning, which is what makes the
+    comparison clean -- and it is why the flag cannot accidentally look like an
+    improvement simply from perturbed initialisation.
+
+    ~50 parameters against ~192M in the XLM-R embedding matrix, so a gain here
+    cannot be dismissed as added capacity.
+    """
+
+    def __init__(self, hidden_dim: int):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def forward(self, log_age: torch.Tensor, known: torch.Tensor) -> torch.Tensor:
+        features = torch.stack([log_age, known], dim=-1)
+        return self.mlp(features).squeeze(-1)
+
+
 class NRMS(nn.Module):
     def __init__(
         self,
@@ -112,6 +145,8 @@ class NRMS(nn.Module):
         attention_hidden_dim: int,
         dropout: float,
         padding_idx: int | None = None,
+        freshness: bool = False,
+        freshness_hidden_dim: int = 16,
     ):
         super().__init__()
         self.news_encoder = NewsEncoder(
@@ -122,10 +157,24 @@ class NRMS(nn.Module):
         )
         self.output_dim = self.news_encoder.output_dim
 
+        # Constructed only when enabled, and last: building it unconditionally
+        # would draw from the RNG even when disabled, shifting every subsequent
+        # parameter's initialisation and quietly stopping the baseline arm from
+        # reproducing the baseline runs it is being compared against.
+        self.freshness_head = FreshnessHead(freshness_hidden_dim) if freshness else None
+
     def forward(
-        self, history_tokens: torch.Tensor, candidate_tokens: torch.Tensor
+        self,
+        history_tokens: torch.Tensor,
+        candidate_tokens: torch.Tensor,
+        candidate_log_age: torch.Tensor | None = None,
+        candidate_age_known: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """(B, H, T), (B, C, T) -> (B, C) raw dot-product logits."""
+        """(B, H, T), (B, C, T) -> (B, C) raw dot-product logits.
+
+        The two age tensors are (B, C) and ignored unless a freshness head is
+        attached, so the baseline and freshness arms share one call signature.
+        """
         user_vector = self.user_encoder(history_tokens)  # (B, D)
 
         batch, n_candidates, title_size = candidate_tokens.shape
@@ -133,10 +182,22 @@ class NRMS(nn.Module):
         candidate_vectors = self.news_encoder(flat).reshape(batch, n_candidates, -1)
 
         # One user vector broadcast across that impression's candidates.
-        return torch.einsum("bcd,bd->bc", candidate_vectors, user_vector)
+        logits = torch.einsum("bcd,bd->bc", candidate_vectors, user_vector)
+
+        if self.freshness_head is not None:
+            if candidate_log_age is None or candidate_age_known is None:
+                raise ValueError("freshness head is attached but candidate age tensors were not supplied")
+            logits = logits + self.freshness_head(candidate_log_age, candidate_age_known)
+        return logits
 
     def score(
-        self, history_tokens: torch.Tensor, candidate_tokens: torch.Tensor
+        self,
+        history_tokens: torch.Tensor,
+        candidate_tokens: torch.Tensor,
+        candidate_log_age: torch.Tensor | None = None,
+        candidate_age_known: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Their `scorer` head. Monotone in `forward`, so ranking is unchanged."""
-        return torch.sigmoid(self.forward(history_tokens, candidate_tokens))
+        return torch.sigmoid(
+            self.forward(history_tokens, candidate_tokens, candidate_log_age, candidate_age_known)
+        )
