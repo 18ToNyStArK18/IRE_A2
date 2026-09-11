@@ -4,11 +4,27 @@ Working design log for the Q2 re-ranker. Records what we chose, what we
 rejected, and *why*, so the Q6 design note can be written from evidence rather
 than memory. Decisions marked **PROPOSED** are not yet signed off.
 
-Last updated: 2026-09-10
+Last updated: 2026-09-11
+
+> **Current state (2026-09-11).** Stage 1 is now fresh-pool candidate generation
+> (`src/fresh_pool.py`, the `popular` method): the articles the platform displayed
+> in the hour before each impression, ranked by lagged click counts. Test
+> recall@200 is **97.0% (EB-NeRD) / 93.9% (MIND)**, up from 2.55% / 2.90%. Stage 2
+> is LambdaMART trained on 49 random negatives per group, with Q1 article
+> statistics taken as-of each impression over every earlier event. Test MRR after
+> re-ranking: **0.2102 (EB-NeRD, +28% over stage 1) / 0.2239 (MIND, flat)**.
+> Sections 0–2D document the catalogue-candidate phase that came first; where §2E
+> overturned their premises they carry a dated note. Read §2E for the current
+> pipeline.
 
 ---
 
 ## 0. The constraint that drives every decision below
+
+> **Superseded 2026-09-11 (§2E).** Everything in this section is true of A1's
+> catalogue-wide candidates, which the re-ranker used until §2E. With fresh-pool
+> candidates the click is in the top-200 for 97.0% (EB-NeRD) / 93.9% (MIND) of
+> test impressions, so the ceiling described here no longer applies.
 
 Read this first; several conclusions here invert the textbook answer, and this
 is the reason.
@@ -50,6 +66,10 @@ Note the clicks/impression column is measured over the *in-view* list, so every
 impression has ≥1 click there. The ~96% loss happens at retrieval.
 
 ### 0.1 Does one positive per group make re-ranking pointless? No — measured
+
+> **Superseded 2026-09-11 (§2E).** The ~96%-empty groups and the ≈ 0.035 MRR
+> ceiling below belong to catalogue candidates. With fresh-pool candidates the
+> final test MRR is 0.2102 (EB-NeRD) / 0.2239 (MIND).
 
 Two separate facts get conflated here, and only one is a problem:
 
@@ -148,6 +168,11 @@ relevance is binary and positives are sparse — which describes our data.
 
 ### 1.3 How our data shapes the choice
 
+> **Note 2026-09-11 (§2E).** The "~96% of groups carry no positive" premise below
+> belongs to catalogue candidates; with fresh-pool candidates most groups hold a
+> positive. The LambdaMART decision (§1.4) is unaffected — it also rests on
+> optimising the metric family we report, and on tooling.
+
 **Pairwise/listwise silently discard groups with no positive.** A group whose
 labels are all 0 generates zero pairs (LambdaMART) or a degenerate all-zero
 target distribution (listwise softmax). Either way it contributes no gradient.
@@ -224,6 +249,13 @@ top-heavy metrics, and not a first-class LightGBM objective anyway.
 
 ### 1.5 Implementation notes this decision implies
 
+> **Superseded in part 2026-09-11 (§2E).** Pre-filtering to positive-bearing groups
+> no longer shrinks anything with fresh-pool candidates. Training now uses 49
+> random negatives per group (hard negatives were tried and hurt) and caps MIND at
+> 60k impressions; evaluation runs in impression chunks and stays exact. "Before
+> re-ranking" now uses stage-1 rank rather than `retrieval_score`, since
+> popularity scores are tied integers.
+
 - LightGBM needs a `group` array of contiguous group sizes; rows for one
   impression must be adjacent. Sort by `impression_id` before constructing the
   Dataset.
@@ -242,7 +274,7 @@ top-heavy metrics, and not a first-class LightGBM objective anyway.
 - Report **"n impressions with ≥1 positive"** next to every metric. Without it
   the numbers are unreadable and look like a broken model rather than a
   documented recall ceiling.
-- `lightgbm` is **not yet in `requirements.txt`** — needs adding.
+- ~~`lightgbm` is not yet in `requirements.txt`~~ — added (`lightgbm>=4.3`).
 
 ---
 
@@ -278,6 +310,11 @@ fields, or the split definitions change.
 Compare: the entire NRMS baseline is a couple of GPU-hours.
 
 ### 2.3 The recall ceiling defeats it anyway
+
+> **Note 2026-09-11 (§2E).** This argument no longer holds: with fresh-pool
+> candidates the click is in the set for 97.0% / 93.9% of impressions. The
+> cross-encoder rejection still stands on §2.2 (compute) and §2.4 (latency); the
+> cascade in §2.6 remains the route if it is ever wanted.
 
 Even granting the compute: a cross-encoder improves the *ordering within* the
 candidate set. In ~96% of our groups the clicked article **is not in the set at
@@ -397,6 +434,10 @@ So the model is doing genuine work at the top of the list, and the coarse
 separation it leans on is largely free.
 
 ### Consequences to carry into the report
+
+> **Note 2026-09-11 (§2E).** The bound by retrieval below applies to catalogue
+> candidates. With fresh-pool candidates absolute numbers are no longer capped by
+> a 2.5% recall.
 
 - **Report MRR and nDCG as the headline; treat AUC as diagnostic.** Here AUC is
   dominated by an easy, non-personalised discrimination and overstates the
@@ -528,6 +569,15 @@ train-set ranking.
 
 ### Finding 3 — feature importance tracks data availability, giving a free ablation
 
+> **Caveat 2026-09-11.** For catalogue candidates this "natural ablation" is
+> confounded. EB-NeRD's `has_known_publish_time` flags articles published *after*
+> the impression — 0% of clicked articles versus 10.7% of the catalogue — which
+> makes it a perfect negative indicator that could not exist at serving time; MIND
+> has no such shortcut. So part of EB-NeRD's freshness weight here may be that
+> shortcut rather than better freshness data. Under fresh-pool candidates the
+> shortcut is gone (0.003% of rows), and the EB-NeRD/MIND gap persists for a
+> different reason (§2E).
+
 | config | top features |
 |---|---|
 | ebnerd/bm25 | freshness **80%**, display_count 10%, category_affinity 1% |
@@ -589,22 +639,157 @@ benchmark under contention.
 
 ---
 
+## 2E. Stage-1 recall fix: fresh-pool candidates (2026-09-11)
+
+§0's recall ceiling turned out not to be inherent. It came from *where* stage 1
+searched and *what* it ranked by.
+
+### Diagnosis
+
+Clicks go to what is in circulation right now: EB-NeRD's median clicked-article
+age at click time is **3.1 h**, and 92% are clicked within 24 h of publication.
+A1 searched a catalogue reaching back to **2000**. Two separate mistakes
+compounded:
+
+1. **Wrong search space.** Restricting A1's *unchanged* BM25 to articles the
+   platform displayed in the previous hour lifts EB-NeRD recall@200 from 2.55%
+   to 84.2%.
+2. **Wrong ranking signal.** Ranking that same pool by recent popularity reaches
+   97.0% / 93.9%. History similarity adds nothing on top.
+
+### Stage-1 ablation — test recall@K, full populations
+
+| arm | EB-NeRD @50 / @100 / @200 | MIND @50 / @100 / @200 |
+|---|---|---|
+| `bm25` — A1, whole catalogue | 0.82 / 1.41 / **2.55%** | 1.27 / 1.96 / **2.90%** |
+| `bm25_fresh` — A1 scoring, 1 h pool | 21.9 / 42.9 / **84.2%** | 10.0 / 14.2 / **21.0%** |
+| `popular` — 1 h pool, lagged clicks | 83.4 / 93.8 / **97.0%** | 81.6 / 88.6 / **93.9%** |
+
+`bm25` reproduces §0's figures exactly, so the arms are like-for-like.
+
+The pool (`src/fresh_pool.py`) is built only from events strictly before the
+impression time *t*: displays in [*t* − 1 h, *t*); clicks from impressions in
+[*t* − 1 h, *t* − 10 min), because a click lands after its impression; and a 24 h
+display backfill when the 1 h pool is shorter than K. On 2,000-impression
+samples, 1 h beat 6 h and 24 h (longer windows let stale-but-popular articles
+crowd out fresh ones), and the 10-minute lag cost 0 pp on EB-NeRD and ~1 pp on
+MIND.
+
+Two findings worth carrying into the report:
+
+- **History similarity is too sparse to rank a fresh pool.** On MIND a title
+  query scores a median of only **~20 of ~2,000** pool articles above zero, so
+  `bm25_fresh`'s top-200 is ~90% ties, and its recall swung from 10% to 92%
+  depending on the tie rule. It now breaks ties with a seeded random draw — the
+  only rule under which the arm measures BM25 and nothing else. Insertion order
+  smuggles in recency; popularity ties turn the arm into `popular`.
+- **The future-article shortcut is gone.** Catalogue retrieval could return
+  articles published after the impression (10.7% of the catalogue per EB-NeRD
+  test impression), and `has_known_publish_time` flagged them perfectly. In
+  `popular` candidates that falls to 0.003% of rows, and all of those come from 4
+  articles the platform *displayed* before a bulk re-stamp of their
+  `published_time` on 2023-06-29 — a data quirk, not a leak. The guarantee is
+  "displayed strictly before *t*", not "published before *t*".
+
+### The re-ranker needed two fixes before it beat stage 1
+
+**Scale first.** With ~94–97% of groups now holding a positive, §1.5's
+positives-only filter no longer shrinks anything, and the feature builder's
+dicts cost ~1.8 KB/row against ~5 GB of free RAM. Feature rows are now flushed
+every 250k; training subsamples negatives; MIND training is capped at 60k
+impressions (§2D Finding 4 showed more MIND data did not help); evaluation runs
+in impression chunks and still scores every candidate, so metrics stay exact.
+"Before re-ranking" is now stage-1 *rank* rather than `retrieval_score`, because
+popularity scores are tied integers and sorting on them would scramble the ties.
+
+**Bug 1 — train/serve skew in the Q1 article statistics.** `TrainEventIndex`
+froze val/test statistics at the end of train. Train rows got live, accumulating
+counts; test rows got a snapshot in which the fresh articles actually clicked
+all read zero. The median `click_count_article` of clicked articles was **16 on
+train, 0 on val and test**, and 99.2% of clicked test articles read exactly zero.
+The model learned "many clicks → clicked" and then buried fresh articles. Fix:
+the re-ranker builds the index over every earlier event
+(`splits=("train", "val", "test")`) with the same 10-minute click lag. That is
+what a live system's counters hold, and it is still strictly before *t*. The CTR
+prior stays train-only, and Q1's default behaviour is unchanged.
+
+**Bug 2 — hard-negative sampling.** Keeping each group's 24 best-ranked negatives
+over-represents exactly the part of the list where stage-1 rank separates the
+positive least well, so the model learned rank was weak and ranked worse than
+stage 1 over all 200. Random negatives keep the rank distribution representative.
+
+EB-NeRD, chosen on val, test reported alongside:
+
+| configuration | val MRR | test MRR | test nDCG@5 |
+|---|---|---|---|
+| stage-1 popularity (before) | 0.1690 | 0.1639 | 0.1471 |
+| train-only stats, hard24 + rand25 | — | 0.1291 | 0.0994 |
+| all-splits stats, hard24 + rand25 | 0.1447 | 0.1415 | 0.1139 |
+| all-splits, hard24 + rand25, candidate-level features only | 0.1020 | 0.1018 | 0.0696 |
+| all-splits, full groups (no sampling) | 0.2187 | 0.2085 | 0.1974 |
+| **all-splits, 49 random negatives (chosen)** | **0.2249** | **0.2102** | **0.2007** |
+
+Random sampling edges out full groups at a quarter of the rows. Dropping the
+impression-level features hurt badly — but that arm ran under the discarded
+hard-negative sampling, so it is not the clean feature-group ablation.
+
+### Final results — test, K = 200, before = stage-1 popularity order
+
+| | EB-NeRD | MIND |
+|---|---|---|
+| impressions / with the click in the top-200 | 25,356 / 97.0% | 73,152 / 93.9% |
+| AUC | 0.8815 → **0.9213** | 0.8655 → 0.8799 |
+| MRR | 0.1639 → **0.2102** (+28.2%) | 0.2237 → 0.2239 (+0.1%) |
+| nDCG@5 | 0.1471 → **0.2007** (+36.5%) | 0.2451 → 0.2450 (−0.0%) |
+| nDCG@10 | 0.1994 → **0.2691** (+34.9%) | 0.2932 → 0.2980 (+1.6%) |
+| training impressions / rows | 21,897 / 1.09M | 54,222 / 2.73M |
+| top features (gain) | freshness 53%, position_bias 23% | position_bias 57%, retrieval_rank 15% |
+
+Against the catalogue pipeline (§2D), MRR goes 0.0182 → **0.2102** on EB-NeRD and
+0.0032 → **0.2239** on MIND.
+
+- **EB-NeRD:** the re-ranker adds a lot on top of popularity, mostly through
+  freshness, which rests on a real `published_time`.
+- **MIND:** a wash. 72% of the model's gain is stage-1 rank; it learned to trust
+  stage 1. MIND has no publish date, and within an hour-old pool "first seen" is
+  close to uniform across candidates, so the Q1 features carry little beyond
+  popularity. Same direction as §2D Finding 3, though no longer explained by the
+  future-article shortcut, which is gone.
+
+### Caveats
+
+- **No paired bootstrap CIs yet** (Q3 requires them). EB-NeRD's +28% over 25k
+  impressions is very likely significant; MIND's +0.1% is not a gain.
+- The pool leans on the platform's own display log. That is legitimate at serving
+  time, but it rides the platform's recommender. An EB-NeRD variant with no logs
+  at all — newest-published first — reached 94.0% @200 on a sample.
+- The 10-minute click lag is an assumption; no click timestamps exist to
+  calibrate it.
+- **Still not comparable with NRMS.** MRR over 200 candidates is not NRMS's MRR
+  over the ~9–23 in-view articles. A fair head-to-head needs identical candidate
+  sets.
+
+---
+
 ## 3. Open decisions
 
 - [x] ~~Sign-off on §1.4 (LambdaMART primary) and §2.6 (no cross-encoder).~~
       **Done 2026-09-10.** Ablation is over the Q1 feature groups.
-- [ ] Raising A1's retrieval recall is tracked in `todo.md`, deliberately
-      deferred: the re-ranker consumes the candidate contract regardless of
-      candidate quality, so better retrieval changes the numbers, not the code.
-- [ ] **MIND train scale.** 27.7M rows before filtering. Group pre-filtering
-      (§1.5) cuts it to ~1.2M, which is comfortable — confirm that is the chosen
-      route rather than subsampling impressions.
-- [ ] Which candidate source feeds the re-ranker: BM25, semantic, or both as
-      separate runs. Both are generated at K=200; only `ebnerd/bm25/val` exists
-      on disk so far.
+- [x] ~~Raising A1's retrieval recall.~~ **Done 2026-09-11** (§2E): fresh-pool
+      popularity candidates, recall@200 97.0% (EB-NeRD) / 93.9% (MIND).
+- [x] ~~MIND train scale.~~ **Resolved 2026-09-11** (§2E): with ~94% of groups
+      holding a positive, pre-filtering no longer shrinks anything. Training uses
+      49 random negatives per group and caps MIND at 60k impressions; evaluation is
+      chunked and exact.
+- [x] ~~Which candidate source feeds the re-ranker.~~ **Resolved 2026-09-11**:
+      `popular` (§2E). `bm25` and `bm25_fresh` stay as stage-1 ablation arms.
 - [ ] Whether the Q3 "principled improvement" is the loss-function change
       (pointwise → LambdaMART) or the bi-encoder feature. Either works; they
       should not be conflated into one ablation arm.
+- [ ] Paired bootstrap 95% CIs for the §2E before/after deltas.
+- [ ] The Q1 feature-group ablation under the chosen random-negative sampling
+      (§2E's candidate-level-only arm ran under the discarded hard negatives).
+- [ ] A fair Q3 head-to-head with NRMS on identical candidate sets.
 
 ## 4. Changelog
 
@@ -616,3 +801,11 @@ benchmark under contention.
   at rank 1, leaving 97% of the achievable MRR unclaimed. Confirms that
   single-positive groups are not the problem and that the re-ranker has a real,
   quantified opportunity.
+- **2026-09-11** — Added §2E: the stage-1 recall fix (fresh-pool candidates,
+  recall@200 2.55% / 2.90% → 97.0% / 93.9%), the two re-ranker bugs it exposed
+  (train/serve skew in the article statistics; hard-negative sampling), and the
+  final results. Resolved the recall, MIND-scale and candidate-source decisions;
+  added CIs, the clean feature-group ablation and the NRMS head-to-head as open.
+- **2026-09-11** — Added the "Current state" block and dated supersession notes to
+  §0, §0.1, §1.3, §1.5, §2.3, §2B and §2D Finding 3 where §2E overturned their
+  premises; marked the lightgbm requirement done.

@@ -20,6 +20,15 @@ easy to get wrong:
    train is 27.7M candidate rows, of which ~4.5% of groups can affect any
    reported number. Labelling is a cheap set-membership test, so we filter
    first and build features for ~1.2M rows instead of 27.7M.
+
+3. **With fresh-pool candidates that filter no longer shrinks anything.**
+   `popular` puts the click in the top-200 for 97.0% (EB-NeRD) / 93.9% (MIND) of
+   test impressions, so almost every group survives it. Training therefore
+   subsamples negatives (every positive plus 49 random negatives -- see
+   TRAIN_RANDOM_NEGATIVES for why not hard negatives) and caps MIND at 60k
+   impressions; evaluation runs a chunk of impressions at a time and still scores
+   every candidate, so reported metrics stay exact. Feature building
+   costs ~1.8 KB/row transiently, which is what forces this on a ~5 GB budget.
 """
 
 from __future__ import annotations
@@ -57,6 +66,37 @@ DEFAULT_PARAMS = {
     "seed": 42,
 }
 
+# Training-only negative sampling (module docstring, point 3): every positive
+# plus 49 negatives drawn uniformly at random, ~4x fewer rows than full groups.
+#
+# Hard negatives were tried first and are deliberately OFF. Keeping each group's
+# 24 best-ranked negatives over-represents exactly the part of the list where the
+# stage-1 rank separates the positive least well, so the model learns rank is a
+# weak signal -- and then ranks worse than stage 1 over the full 200. Measured on
+# EB-NeRD val MRR (stage 1 = 0.1690): hard24+rand25 0.1447, full groups with no
+# sampling 0.2187, random-only 0.2249. Random sampling keeps the rank
+# distribution representative, and matches full groups at a quarter of the rows.
+TRAIN_HARD_NEGATIVES = 0
+TRAIN_RANDOM_NEGATIVES = 49
+# Memory, not data: DesignChoices.md §2D Finding 4 showed 31x more MIND training
+# impressions did not help.
+TRAIN_IMPRESSION_CAP = {"mind": 60_000}
+EVAL_CHUNK_IMPRESSIONS = 5_000
+SEED = 42
+# Article stats are taken as-of each row's own time over EVERY earlier event,
+# not Q1's train-only default. Frozen end-of-train counts read zero for the fresh
+# articles actually clicked at test time -- a train/serve skew that put the first
+# `popular` run 18-21% below stage 1 on val/test (see article_stats module
+# docstring). Still strictly before t, with the same click reporting lag as the
+# fresh pool.
+ARTICLE_STATS_SPLITS = ("train", "val", "test")
+
+
+def _article_index(processed_dir, dataset: str):
+    return article_stats.TrainEventIndex(
+        processed_dir, dataset, splits=ARTICLE_STATS_SPLITS, click_lag_minutes=config.CLICK_REPORTING_LAG_MINUTES
+    )
+
 
 # --------------------------------------------------------------- labelling
 
@@ -88,6 +128,23 @@ def impressions_with_positive(labelled: pd.DataFrame) -> np.ndarray:
     return per_impression[per_impression > 0].index.to_numpy()
 
 
+def sample_negatives(labelled: pd.DataFrame, n_hard: int, n_random: int, seed: int) -> pd.DataFrame:
+    """Keep every positive, each impression's `n_hard` best-ranked negatives, and
+    `n_random` of its remaining negatives drawn uniformly (seeded).
+
+    Training only: evaluation metrics depend on every candidate. `rank` still
+    records each row's original stage-1 position, so no rank information is lost.
+    """
+    is_negative = labelled["label"].to_numpy() == 0
+    negatives = labelled[is_negative]
+    hard = negatives.groupby("impression_id", sort=False)["rank"].rank(method="first").to_numpy() <= n_hard
+    rest = negatives[~hard]
+    draw = pd.Series(np.random.default_rng(seed).random(len(rest)), index=rest.index)
+    drawn = draw.groupby(rest["impression_id"].to_numpy()).rank(method="first").to_numpy() <= n_random
+    keep = labelled.index[~is_negative].union(negatives.index[hard]).union(rest.index[drawn])
+    return labelled.loc[keep]
+
+
 # ------------------------------------------------------- matrix construction
 
 def feature_columns(matrix: pd.DataFrame) -> list[str]:
@@ -102,14 +159,21 @@ def build_matrix(
     article_index=None,
     k: int | None = None,
     positives_only: bool = False,
+    sample_negatives_for_training: bool = False,
+    impressions=None,
+    seed: int = SEED,
 ) -> pd.DataFrame:
     """Candidates -> labelled feature matrix, sorted by impression so LightGBM's
     contiguous-group requirement holds.
 
-    `positives_only=True` restricts to impressions containing a positive; use it
-    for TRAINING only (see module docstring).
+    `positives_only=True` restricts to impressions containing a positive -- exact
+    for evaluation too, see `evaluate_over_population`.
+    `sample_negatives_for_training=True` subsamples each group's negatives; for
+    training and early-stopping validation only, never evaluation.
+    `impressions` restricts to a subset of impression ids before anything is
+    exploded or built, which is how sampling and chunking stay cheap.
     """
-    cands = candidates_module.load_candidates(processed_dir, method, split, k)
+    cands = candidates_module.load_candidates(processed_dir, method, split, k, impressions=impressions)
     clicks = true_clicks(processed_dir, split)
     cands = label_candidates(cands, clicks)
 
@@ -117,7 +181,10 @@ def build_matrix(
         keep = set(impressions_with_positive(cands).tolist())
         cands = cands[cands["impression_id"].isin(keep)]
 
-    article_index = article_index or article_stats.TrainEventIndex(processed_dir, dataset)
+    if sample_negatives_for_training:
+        cands = sample_negatives(cands, TRAIN_HARD_NEGATIVES, TRAIN_RANDOM_NEGATIVES, seed)
+
+    article_index = article_index or _article_index(processed_dir, dataset)
     matrix = feature_pipeline.build_feature_matrix(
         processed_dir, dataset, split, cands, article_index=article_index
     )
@@ -202,19 +269,71 @@ def evaluate_before_after(
 ) -> dict:
     """Q2's "before and after re-ranking" on identical impressions.
 
-    Before = stage 1's own ordering (its raw retrieval score). After = the
-    re-ranker's. Both are averaged over the same full population, so the delta
-    measures ranking quality rather than which impressions were included.
+    Before = stage 1's own ordering, taken from its RANK rather than its raw
+    score: `popular` scores are integer click counts with ties everywhere, and
+    sorting on those would scramble the ties and understate the baseline. Rank is
+    the exact stage-1 order for every generator, and matches the score order for
+    BM25 up to ties. After = the re-ranker's. Both are averaged over the same full
+    population, so the delta measures ranking quality rather than which
+    impressions were included.
     """
-    scored = matrix.copy()
-    scored["model_score"] = model_scores
-
-    labels, before = group_arrays(scored, "retrieval_score")
-    _, after = group_arrays(scored, "model_score")
-
+    labels, before, after = score_groups(matrix, model_scores)
     return {
         "before": evaluate_over_population(labels, before, n_impressions_total, ndcg_ks),
         "after": evaluate_over_population(labels, after, n_impressions_total, ndcg_ks),
+    }
+
+
+def score_groups(matrix: pd.DataFrame, model_scores: np.ndarray):
+    """Per-impression (labels, stage-1 order, re-ranker scores). Factored out so
+    chunked evaluation can accumulate groups across chunks and compute exactly
+    what a single pass would."""
+    scored = matrix.copy()
+    scored["model_score"] = model_scores
+    scored["stage1_order"] = -scored["retrieval_rank"].astype(np.float64)
+    labels, before = group_arrays(scored, "stage1_order")
+    _, after = group_arrays(scored, "model_score")
+    return labels, before, after
+
+
+def evaluate_chunked(
+    processed_dir,
+    dataset: str,
+    split: str,
+    method: str,
+    model: lgb.Booster,
+    features: list[str],
+    article_index,
+    k: int | None = None,
+    chunk_impressions: int = EVAL_CHUNK_IMPRESSIONS,
+    ndcg_ks=(5, 10),
+) -> dict:
+    """Full-population before/after, built and scored a chunk of impressions at
+    a time. Every candidate of every scored impression is kept, so this equals a
+    single-pass `evaluate_before_after` -- it just never holds more than one
+    chunk's feature rows in memory."""
+    n_total = len(true_clicks(processed_dir, split))
+    impression_ids = pd.read_parquet(
+        candidates_module.candidates_path(processed_dir, method, split), columns=["impression_id"]
+    )["impression_id"].to_numpy()
+
+    labels, before, after = [], [], []
+    for start in range(0, len(impression_ids), chunk_impressions):
+        chunk = set(impression_ids[start : start + chunk_impressions].tolist())
+        matrix = build_matrix(
+            processed_dir, dataset, split, method, article_index, k, positives_only=True, impressions=chunk
+        )
+        if matrix.empty:
+            continue
+        scores = model.predict(matrix[features].astype(np.float64), num_iteration=model.best_iteration)
+        chunk_labels, chunk_before, chunk_after = score_groups(matrix, scores)
+        labels += chunk_labels
+        before += chunk_before
+        after += chunk_after
+
+    return {
+        "before": evaluate_over_population(labels, before, n_total, ndcg_ks),
+        "after": evaluate_over_population(labels, after, n_total, ndcg_ks),
     }
 
 
@@ -259,28 +378,59 @@ def feature_importance(model: lgb.Booster, features: list[str]) -> pd.DataFrame:
     )
 
 
-def run(dataset: str, method: str, eval_split: str = "test", k: int | None = None) -> dict:
-    processed_dir = candidates_module.PROCESSED_DIRS[dataset]
-    article_index = article_stats.TrainEventIndex(processed_dir, dataset)
+def _training_impressions(processed_dir, dataset: str, method: str, seed: int):
+    """A seeded subset of train impressions under TRAIN_IMPRESSION_CAP, or None."""
+    cap = TRAIN_IMPRESSION_CAP.get(dataset)
+    if cap is None:
+        return None
+    ids = pd.read_parquet(
+        candidates_module.candidates_path(processed_dir, method, "train"), columns=["impression_id"]
+    )["impression_id"].to_numpy()
+    if len(ids) <= cap:
+        return None
+    return set(np.random.default_rng(seed).choice(ids, size=cap, replace=False).tolist())
 
-    # Training and early-stopping validation see positive-bearing groups only;
-    # the reported evaluation does not (see module docstring).
-    train_matrix = build_matrix(processed_dir, dataset, "train", method, article_index, k, positives_only=True)
-    val_matrix = build_matrix(processed_dir, dataset, "val", method, article_index, k, positives_only=True)
+
+def run(
+    dataset: str,
+    method: str,
+    eval_split: str = "test",
+    k: int | None = None,
+    sample_negatives_for_training: bool = True,
+) -> dict:
+    processed_dir = candidates_module.PROCESSED_DIRS[dataset]
+    article_index = _article_index(processed_dir, dataset)
+
+    # Training and early-stopping validation see positive-bearing groups only,
+    # negatives subsampled; the reported evaluation scores every candidate of the
+    # full population (see module docstring).
+    sample = sample_negatives_for_training
+    train_ids = _training_impressions(processed_dir, dataset, method, SEED) if sample else None
+    train_matrix = build_matrix(
+        processed_dir, dataset, "train", method, article_index, k,
+        positives_only=True, sample_negatives_for_training=sample, impressions=train_ids,
+    )
+    val_matrix = build_matrix(
+        processed_dir, dataset, "val", method, article_index, k,
+        positives_only=True, sample_negatives_for_training=sample,
+    )
     features = feature_columns(train_matrix)
+    n_train_impressions = int(train_matrix["impression_id"].nunique())
+    n_train_rows = len(train_matrix)
 
     model = train(train_matrix, val_matrix, features)
+    del train_matrix, val_matrix  # free before evaluation builds its own rows
 
-    eval_matrix = build_matrix(processed_dir, dataset, eval_split, method, article_index, k, positives_only=True)
-    n_total = len(true_clicks(processed_dir, eval_split))
-    scores = model.predict(eval_matrix[features].astype(np.float64), num_iteration=model.best_iteration)
-    report = evaluate_before_after(eval_matrix, scores, n_total)
+    report = evaluate_chunked(processed_dir, dataset, eval_split, method, model, features, article_index, k)
 
     report["dataset"] = dataset
     report["method"] = method
     report["eval_split"] = eval_split
     report["best_iteration"] = model.best_iteration
-    report["n_train_impressions"] = int(train_matrix["impression_id"].nunique())
+    report["n_train_impressions"] = n_train_impressions
+    report["n_train_rows"] = n_train_rows
+    report["negatives_sampled"] = sample
+    report["article_stats_splits"] = list(ARTICLE_STATS_SPLITS)
     report["importance"] = feature_importance(model, features).to_dict("records")
 
     artifact_dir = processed_dir / "reranker"
@@ -323,13 +473,18 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dataset", choices=["mind", "ebnerd", "all"], default="all")
-    parser.add_argument("--method", choices=["bm25", "semantic", "all"], default="all")
+    parser.add_argument("--method", choices=[*candidates_module.METHODS, "all"], default="all")
     parser.add_argument("--eval-split", choices=["val", "test"], default="test")
     parser.add_argument("--k", type=int, default=None, help="slice candidates to top-k (default: all persisted)")
+    parser.add_argument(
+        "--full-train-groups",
+        action="store_true",
+        help="train on every candidate of every group -- the original protocol, no negative sampling or cap",
+    )
     args = parser.parse_args()
 
     datasets = ["mind", "ebnerd"] if args.dataset == "all" else [args.dataset]
-    methods = ["bm25", "semantic"] if args.method == "all" else [args.method]
+    methods = list(candidates_module.METHODS) if args.method == "all" else [args.method]
 
     reports = []
     for dataset in datasets:
@@ -345,7 +500,10 @@ def main() -> None:
                 continue
 
             started = time.perf_counter()
-            report = run(dataset, method, args.eval_split, args.k)
+            report = run(
+                dataset, method, args.eval_split, args.k,
+                sample_negatives_for_training=not args.full_train_groups,
+            )
             report["seconds"] = round(time.perf_counter() - started, 1)
             reports.append(report)
             before, after = report["before"], report["after"]

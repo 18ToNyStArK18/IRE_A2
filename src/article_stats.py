@@ -28,6 +28,22 @@ before the query time" -- deliberately as-of, not a whole-train minimum, so
 an article whose only train sightings are all later than the impression
 being scored is correctly reported as unknown (`has_known_publish_time=False`)
 rather than silently clamped to "just published".
+
+Event scope (`splits`): by default only behaviors_train feeds the index -- the
+Q1 semantics, under which val/test queries see frozen end-of-train totals. That
+is leak-free, but it is a train/serve skew: train rows get live, accumulating
+counts while val/test rows get a frozen snapshot, in which the fresh articles
+actually clicked at test time all read zero. Measured on EB-NeRD with the
+re-ranker over `popular` candidates: clicked articles' median click count is 16
+on train and 0 on val and test (99.2% of clicked test articles read exactly
+zero), and the model -- having learned "many clicks -> clicked" -- fell 18-21%
+below stage 1 on val/test. Passing splits=("train", "val", "test") makes every
+row's stats as-of its own time over every earlier event, which is what a live
+system's counters hold. It adds no future information, because as_of() only
+ever counts events strictly before t. `click_lag_minutes` applies the fresh
+pool's click reporting lag, since a click lands after its impression. The CTR
+prior stays train-only either way, so no global constant carries later-period
+information.
 """
 
 from __future__ import annotations
@@ -51,9 +67,14 @@ _EMPTY_TIMES = np.empty(0, dtype=np.int64)
 
 
 class TrainEventIndex:
-    def __init__(self, processed_dir, dataset: str):
+    def __init__(self, processed_dir, dataset: str, splits=("train",), click_lag_minutes: float = 0.0):
+        """`splits` chooses which behaviour logs feed the index and
+        `click_lag_minutes` delays when a click becomes countable -- see the
+        module docstring. The defaults reproduce Q1's train-only, no-lag
+        semantics exactly."""
         self.dataset = dataset
-        train = pd.read_parquet(processed_dir / "behaviors_train.parquet", columns=["time", "candidates", "labels"])
+        self.splits = tuple(splits)
+        self._click_lag_ns = int(click_lag_minutes * 60 * 10**9)
 
         # array.array("q") holds raw int64s, so accumulating an event retains no
         # Python object -- see the _EMPTY_TIMES note above on why that matters.
@@ -61,15 +82,22 @@ class TrainEventIndex:
         click_times: dict[str, array.array] = defaultdict(lambda: array.array("q"))
         total_clicks = 0
         total_displays = 0
-        times_ns = train["time"].to_numpy(dtype="datetime64[ns]").astype(np.int64)
-        for t_ns, candidates, labels in zip(times_ns, train["candidates"], train["labels"]):
-            t_ns = int(t_ns)
-            for article_id, label in zip(candidates, labels):
-                display_times[article_id].append(t_ns)
-                total_displays += 1
-                if label == 1:
-                    click_times[article_id].append(t_ns)
-                    total_clicks += 1
+        for split in self.splits:
+            frame = pd.read_parquet(
+                processed_dir / f"behaviors_{split}.parquet", columns=["time", "candidates", "labels"]
+            )
+            counts_toward_prior = split == "train" or "train" not in self.splits
+            times_ns = frame["time"].to_numpy(dtype="datetime64[ns]").astype(np.int64)
+            for t_ns, candidates, labels in zip(times_ns, frame["candidates"], frame["labels"]):
+                t_ns = int(t_ns)
+                for article_id, label in zip(candidates, labels):
+                    display_times[article_id].append(t_ns)
+                    if counts_toward_prior:
+                        total_displays += 1
+                    if label == 1:
+                        click_times[article_id].append(t_ns)
+                        if counts_toward_prior:
+                            total_clicks += 1
 
         # behaviors_train is already time-ordered (split.py sorts before
         # slicing), so these sorts are cheap -- kept so as_of() cannot silently
@@ -94,7 +122,9 @@ class TrainEventIndex:
         # side="left" == bisect_left: count of events strictly before as_of_time,
         # so an impression's own click never enters its own feature.
         display_count = int(np.searchsorted(displays, as_of_ns, side="left"))
-        click_count = int(np.searchsorted(clicks, as_of_ns, side="left"))
+        # Clicks additionally wait out the reporting lag: a click from an
+        # impression within the lag of t may not have happened yet at t.
+        click_count = int(np.searchsorted(clicks, as_of_ns - self._click_lag_ns, side="left"))
 
         ctr = (click_count + config.CTR_PRIOR_STRENGTH * self.global_ctr) / (
             display_count + config.CTR_PRIOR_STRENGTH

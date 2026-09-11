@@ -25,6 +25,12 @@ from src import article_stats, sessionize
 from src.candidate_features import build_candidate_features
 from src.impression_features import build_impression_features
 
+# Rows accumulate as dicts, ~1.8 KB each, while the finished frame is ~195 B/row.
+# Flushing periodically bounds that transient: at the scale fresh-pool
+# candidates produce (EB-NeRD train alone is ~4.5M rows) holding every dict at
+# once would need ~8 GB.
+_FLUSH_ROWS = 250_000
+
 
 def load_articles_lookup(processed_dir) -> dict[str, dict]:
     articles = pd.read_parquet(processed_dir / "articles.parquet", columns=["article_id", "category"])
@@ -74,6 +80,7 @@ def build_feature_matrix(
         impression_feats[row.impression_id] = build_impression_features(row, articles_lookup)
         impression_time[row.impression_id] = row.time
 
+    frames: list[pd.DataFrame] = []
     rows = []
     for cand in candidates_df.itertuples(index=False):
         impr_id = cand.impression_id
@@ -95,8 +102,13 @@ def build_feature_matrix(
         row_out.update(cand_feat)
         row_out["label"] = int(cand.article_id in true_clicks[impr_id])
         rows.append(row_out)
+        if len(rows) >= _FLUSH_ROWS:
+            frames.append(pd.DataFrame(rows))
+            rows = []
 
-    return pd.DataFrame(rows)
+    if rows or not frames:
+        frames.append(pd.DataFrame(rows))
+    return frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True)
 
 
 def load_candidates(processed_dir, method: str, split: str, k: int | None = None) -> pd.DataFrame:

@@ -111,3 +111,19 @@ SEMANTIC_CANDIDATE_CONFIG = {
 # baseline uses as its tokenizer/word-vector source -- repointing that would
 # silently change the Q3 baseline too.
 MIND_SEMANTIC_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+# --- A2 Q2 stage 1: fresh-pool candidate generation (src/fresh_pool.py) -----
+# A1's catalogue-wide retrieval recovers the click for only ~2-4% of impressions
+# at K=200, because clicks go to what is in circulation right now (EB-NeRD's
+# median clicked-article age at click time is 3.1h). Candidates are drawn from
+# what the platform displayed just before each impression instead. Figures below
+# are measured on 2,000 sampled test impressions per dataset.
+FRESH_WINDOW_HOURS = 1  # beat 6h and 24h: longer windows let stale-but-popular
+                        # articles crowd out fresh ones (EB-NeRD @200: 97.4% at
+                        # 1h vs 88.9% at 24h)
+FRESH_BACKFILL_HOURS = 24  # only when the 1h pool is shorter than K; EB-NeRD's
+                           # is for 20-59% of impressions. Lifts it 97.4 -> 97.8%
+CLICK_REPORTING_LAG_MINUTES = 10  # clicks land after their impression, so recent
+                                  # impressions' clicks may not exist yet at t
+                                  # (Q9). Costs 0pp EB-NeRD / ~1pp MIND at @200;
+                                  # a 30-min lag would cost MIND ~4pp
