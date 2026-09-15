@@ -165,14 +165,14 @@
   },
   "beyond_accuracy": {
     "diversity": {
-      "mean": NaN,
-      "ci_lower": NaN,
-      "ci_upper": NaN,
-      "n": 0
+      "mean": 0.925711857944727,
+      "ci_lower": 0.9246273602850735,
+      "ci_upper": 0.9267750025928021,
+      "n": 2000
     },
-    "diversity_random_baseline": NaN,
-    "diversity_vs_random": NaN,
-    "_diversity_unavailable": true,
+    "diversity_random_baseline": 0.9402354917187546,
+    "diversity_vs_random": 0.9845531955537241,
+    "_diversity_unavailable": false,
     "_diversity_note": "Raw diversity is not comparable across datasets: it is dominated by how anisotropic the embedding space is. A random EB-NeRD pair scores ~0.049 (provided multilingual BERT, vectors in a narrow cone) and a random MIND pair ~0.945 (MiniLM, contrastively trained). Read diversity_vs_random, where 1.0 means 'as diverse as picking at random' and below 1.0 means the recommender concentrates.",
     "novelty": {
       "mean": 17.289699737965275,

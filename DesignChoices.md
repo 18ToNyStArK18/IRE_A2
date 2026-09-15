@@ -1213,7 +1213,7 @@ between them is itself the §2E result.
 | MRR | 0.2102 [0.2070, 0.2136] | 0.2239 [0.2219, 0.2260] | 0.0194 | 0.0189 |
 | nDCG@5 | **0.2007** [0.1969, 0.2049] | **0.2450** [0.2427, 0.2475] | 0.0202 | 0.0199 |
 | nDCG@10 | 0.2691 [0.2655, 0.2728] | 0.2980 [0.2958, 0.3004] | 0.0204 | 0.0206 |
-| diversity | not measurable here | not measurable here | 0.0372 | 0.8566 |
+| diversity | 0.0374 [0.0363, 0.0386] | 0.9257 [0.9246, 0.9268] | 0.0372 | 0.8566 |
 | novelty | 14.46 [14.456, 14.457] | 17.29 [17.269, 17.311] | 13.05 | 13.57 |
 | coverage | 0.0679 [0.0672, 0.0684] | 0.0032 [0.0031, 0.0033] | 0.1736 | 0.0639 |
 | impressions scored / total | **24,591 / 25,356** | **68,682 / 73,152** | 647 / 25,356 | 2,120 / 73,152 |
@@ -1267,28 +1267,35 @@ them, so the failure is the ranker's, not retrieval's.
 
 ### Diversity is not comparable across datasets — and the raw numbers invert
 
-*(Measured on the `bm25` arm. Diversity is the one metric needing the semantic
-feature store, which this machine never built — `scripts/extended_eval.py` now
-reports it as unavailable and still produces novelty and coverage, rather than
-failing the whole run. Re-run on a machine with `feature_store/embeddings.parquet`
-to fill the two `popular` cells above.)*
-
-Raw diversity reads EB-NeRD 0.037 against MIND 0.857, which looks like EB-NeRD
+Raw diversity reads EB-NeRD 0.037 against MIND 0.926, which looks like EB-NeRD
 recommending near-identical articles. It is an artefact of the embedding space.
 Measured over random article pairs:
 
-| | random-pair diversity | recommended | vs random |
-|---|---|---|---|
-| EB-NeRD (provided multilingual BERT, 768-d) | 0.0484 | 0.0372 | **0.769x** |
-| MIND (MiniLM, 384-d) | 0.9402 | 0.8566 | **0.911x** |
+| | random-pair diversity | recommended (popular) | vs random | (bm25) | vs random |
+|---|---|---|---|---|---|
+| EB-NeRD (provided multilingual BERT, 768-d) | 0.0484 | 0.0374 | **0.774x** | 0.0372 | 0.769x |
+| MIND (MiniLM, 384-d) | 0.9402 | 0.9257 | **0.985x** | 0.8566 | 0.911x |
+
+Both random-pair baselines reproduced to four decimals on a second machine
+(0.0484 / 0.9402), which is the check that the two arms are being measured
+against identical embedding spaces: EB-NeRD's are the provided RecSys24 vectors
+and MIND's are recomputed by `src/embeddings_index.py`, so agreement was not
+guaranteed.
 
 Two *randomly chosen* EB-NeRD articles already have cosine 0.951: raw BERT
 vectors are anisotropic and occupy a narrow cone, while MiniLM is contrastively
 trained and spreads its space. So the 23x raw gap is the embedding model, and
 against its own yardstick **EB-NeRD's recommender concentrates more than MIND's**
-— the opposite of the raw reading. The JSON now carries
-`diversity_random_baseline` and `diversity_vs_random`; report the ratio, never
-the raw value across datasets.
+— the opposite of the raw reading. The JSON carries `diversity_random_baseline`
+and `diversity_vs_random`; report the ratio, never the raw value across datasets.
+
+On the shipped arm MIND sits at **0.985x random**: its one-hour fresh pool spans
+enough topics that a top-10 list is barely less diverse than ten articles drawn
+at random from the whole catalogue. Note this runs *opposite* to coverage, which
+collapsed to 0.32% — the pipeline recommends from a very small set of articles
+that happens to be topically wide. The two metrics are not substitutes, and a
+report that quotes only one of them will mislead in whichever direction it
+picked.
 
 ### Three bugs the first run surfaced
 
@@ -1435,3 +1442,10 @@ Worth recording, because all three would have shipped silently:
   `extended_eval.py` now chunks the accuracy pass (MIND OOM'd at ~14.6M feature
   rows) and degrades diversity gracefully where the semantic feature store is
   absent.
+- **2026-09-15** — §2H diversity filled in for the shipped arm: the EB-NeRD
+  provided-embedding artifact and MIND's MiniLM feature store were both built
+  locally, so all seven Q5 metrics now come from `popular` on one machine.
+  EB-NeRD 0.0374 (0.774x random), MIND 0.9257 (**0.985x** random). Both
+  random-pair baselines reproduced the other machine's to four decimals.
+  MIND's near-random diversity sits opposite its 0.32% coverage — a small
+  article set that is topically wide — so the two must be reported together.
