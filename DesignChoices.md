@@ -973,6 +973,9 @@ confounded by one arm simply training longer. W&B: `rn5oq50v` (EB-NeRD),
 CIs are a paired bootstrap over test **impressions** (2,000 resamples, seed 0,
 both models held fixed), scoring the identical impression population both sides —
 so they bound sampling noise in the test set, **not** training variance.
+Reproduce with `python scripts/paired_bootstrap.py --dataset ebnerd`; the
+diagnostics in the next section come from `python scripts/age_signal.py`. Both
+reuse `src/metrics.py`, so they cannot drift from `metrics_test.json`.
 
 **EB-NeRD: a large, unambiguous gain.** +0.069 AUC, with the CI nowhere near
 zero and per-impression win/tie/loss of 46.2% / 35.1% / 18.6%. It is visible from
@@ -984,14 +987,14 @@ spans zero; per impression the arms win and lose about equally (32.0% / 38.3% /
 29.7%). Only nDCG@5's CI excludes zero, as a *loss* of 0.0012 — one marginal
 exclusion across four correlated metrics, and not a result worth a story.
 
-### Why MIND gained nothing — not the coverage bug, the candidate sets
+### Why the MIND arm gained nothing — and how far that generalises
 
-The obvious suspect is the bug fixed above, but the coverage is now fine:
-**99.9%** of MIND test candidates and 99.9% of test clicks carry an age. (The
-run log's "34.9% of catalogue articles" is a different and harmless number —
-most catalogue articles never appear in a behaviour log at all; the ones actually
-shown are dated.) The real cause is that **age barely separates clicks on MIND**,
-measured on the test split of each dataset:
+The obvious suspect is the bug fixed above, but coverage is now fine: **99.9%**
+of MIND test candidates and 99.9% of test clicks carry an age. (The run log's
+"34.9% of catalogue articles" is a different and harmless number — most catalogue
+articles never appear in a behaviour log at all; the ones actually shown are
+dated.) What differs is the signal itself, measured on each test split with
+`scripts/age_signal.py`:
 
 | test split | EB-NeRD | MIND |
 |---|---|---|
@@ -1000,19 +1003,48 @@ measured on the test split of each dataset:
 | median within-impression age spread (std) | **1,057 h** | **27.5 h** |
 | candidates / clicks carrying an age | 100% / 100% | 99.9% / 99.9% |
 
-EB-NeRD impressions mix minutes-old articles with weeks-old ones, so age
-discriminates strongly. MIND impressions are internally near-uniform in age, and
-an additive term that is nearly constant across a row cannot reorder it. The
-learned curves agree: EB-NeRD's peaks at ~6 h and falls away on both sides
-(−0.43 at 15 min, −0.81 at 30 d, relative to the peak), while MIND's is
-monotone and shallow (−0.10 at 1 h to −1.36 at 30 d, with `known=0` scored like
-the freshest bucket).
+EB-NeRD impressions mix minutes-old articles with weeks-old ones; MIND
+impressions are internally near-uniform in age, and an additive term that is
+nearly constant across a row cannot reorder it. The learned curves match:
+EB-NeRD's peaks at ~6 h and falls away on both sides, while MIND's is monotone
+and shallow.
 
-So §2F's asymmetry prediction held, **but not for the stated reason**. It is not
-that MIND's first-seen proxy is noisier than a real `published_time`; it is that
-MIND's in-view sets are age-homogeneous, so there is little age signal to
-extract. This is §2D Finding 3 in a new guise — feature value tracks what the
-dataset's candidate sets actually vary in.
+**Worth knowing for the report: "newest first" is not the rule.** Ranking
+EB-NeRD's candidates by recency alone scores AUC **0.4950** — chance. The signal
+is a *band* around ~6 h, which only a learned curve can express. Any claim that
+"recency helps" should say age-band, not recency.
+
+### The claim this licenses: freshness-**as-first-seen** fails on MIND
+
+MIND has no publish dates, so its age is the earliest-sighting proxy, and that
+proxy is right-censored: an article already in circulation when logging began
+cannot be dated earlier than the log window. So the defensible claim is
+**"freshness-as-first-seen doesn't help on MIND"**, not "freshness doesn't help
+on MIND". With real publish dates the within-impression spread could be far
+larger and the conclusion could change. The report must not overreach here.
+
+EB-NeRD is the only dataset that can price the proxy, having both definitions.
+Feeding the *same* trained curve first-seen ages instead of real ones
+(`scripts/age_signal.py --dataset ebnerd --reference first-seen`):
+
+| EB-NeRD test, one fitted curve, two age definitions | `published_time` | first-seen proxy |
+|---|---|---|
+| head-alone AUC | 0.6765 | **0.6631** |
+| median within-impression spread | 1,057 h | **52.7 h** |
+| candidates dated | 100% | 99.6% |
+| median understatement vs truth | — | 0.1 h (13.6% understated by >24 h) |
+
+So the proxy compresses the spread ~20x yet costs only **0.013 AUC**: it stays
+accurate in the 0–12 h band where the discrimination actually happens, and only
+the old tail is clamped. On the one dataset where this is checkable, the proxy is
+not what kills the signal — which makes "MIND's in-view sets are genuinely
+age-homogeneous" the better-supported explanation of the null.
+
+That evidence narrows the uncertainty; it does not remove it. It is EB-NeRD
+evidence about an EB-NeRD-shaped age distribution, and MIND's censored share
+cannot be measured without the publish dates it does not ship. **State the scoped
+claim, cite the transfer test as the reason a proxy artefact is the less likely
+explanation, and leave it there.**
 
 ### The honest caveat for the report
 
@@ -1033,7 +1065,8 @@ lesson as §2B, where freshness alone reached AUC 0.8475 with no model at all.
 EB-NeRD's +0.069 is an order of magnitude larger than plausible seed-to-seed
 variation, so extra seeds are not needed to support the claim. MIND's null is
 likewise not a seed question: the diagnostic above shows there is no signal to
-find, and repeating it would only re-measure zero. Seeds 43/44 stay available
+find *under the first-seen definition*, and repeating it would only re-measure
+zero. Seeds 43/44 stay available
 (`--seed 43 --run-tag freshness_s43`) if a reviewer asks.
 
 ---
@@ -1105,3 +1138,13 @@ find, and repeating it would only re-measure zero. Seeds 43/44 stay available
   1,057 h), **not** to the corrected coverage bug — 99.9% of MIND test candidates
   are dated. Recorded the caveat that EB-NeRD's age-only ranker (0.677) beats the
   full freshness NRMS (0.611). Seed-count decision closed.
+- **2026-09-15** — §2F: scoped the MIND conclusion to "freshness-**as-first-seen**
+  doesn't help on MIND" — the proxy is right-censored, so the null cannot be
+  claimed for freshness in general. Added the EB-NeRD transfer test that prices
+  the proxy where both definitions exist (one fitted curve, real vs proxy ages:
+  AUC 0.6765 → 0.6631, within-impression spread 1,057 h → 52.7 h), which makes
+  age-homogeneous in-view sets the better-supported explanation of the null
+  without settling it. Also recorded that EB-NeRD's signal is an age *band*
+  (~6 h), not recency: newest-first ranks at AUC 0.4950, chance. Moved the
+  analysis into `scripts/paired_bootstrap.py` and `scripts/age_signal.py` so
+  every figure in §2F Results is reproducible.
