@@ -1193,6 +1193,105 @@ as one.
 
 ---
 
+## 2H. Q5 — extended evaluation (2026-09-15)
+
+`scripts/extended_eval.py` → `results/extended_eval_<dataset>_<method>.json`.
+A1's `beyond_accuracy.py`, `slicing.py` and `bootstrap.py` are now ported into
+`src/` (the §1.4 decision to run one harness on A2's metrics API), so every
+figure reuses `src/metrics.py` and cannot drift from `report_<method>_<split>.json`.
+
+Run below on the **`bm25`** arm, the strongest trained model on this laptop; the
+shipped `popular` models live on the training machine. The script is
+method-agnostic — `--method popular` reproduces this for the shipped pipeline.
+
+### Results, test split, top-10 for beyond-accuracy
+
+| | EB-NeRD/bm25 | MIND/bm25 |
+|---|---|---|
+| AUC | 0.9787 [0.9696, 0.9863] | 0.9698 [0.9660, 0.9734] |
+| MRR | 0.0194 [0.0179, 0.0210] | 0.0189 [0.0179, 0.0198] |
+| nDCG@5 | 0.0202 [0.0187, 0.0219] | 0.0199 [0.0190, 0.0209] |
+| nDCG@10 | 0.0204 [0.0190, 0.0220] | 0.0206 [0.0196, 0.0216] |
+| diversity | 0.0372 [0.0358, 0.0385] | 0.8566 [0.8530, 0.8607] |
+| novelty | 13.05 [13.01, 13.09] | 13.57 [13.48, 13.65] |
+| coverage | 0.1736 [0.1710, 0.1762] | 0.0639 [0.0628, 0.0650] |
+| impressions scored / total | 647 / 25,356 | 2,120 / 73,152 |
+
+Accuracy is averaged over the **full** population — only positive-bearing
+impressions are scored, which is exact, not a shortcut (§2E, tested). The AUC is
+the inflated catalogue-negatives figure §2B explains, not a like-for-like number
+against NRMS.
+
+### Slices (nDCG@5)
+
+| | cold-start | warm | head | tail |
+|---|---|---|---|---|
+| EB-NeRD | 0.0299 (n=2 ⚠) | 0.0202 (n=645) | 0.0128 (n=9 ⚠) | 0.0203 (n=638) |
+| MIND | **0.0117** (n=232) | **0.0217** (n=1,888) | 0.0279 (n=565) | 0.0188 (n=1,555) |
+
+**MIND cold-start users are ~46% worse than warm ones** (0.0117 vs 0.0217), on
+slices large enough to mean something. That is the expected direction — a
+history-driven re-ranker has least to work with when there is least history —
+but it is now measured rather than assumed, and it is the strongest argument for
+the cold-start handling the fresh pool already provides at stage 1.
+
+EB-NeRD's slices are marked ⚠ and carry a `warning` in the JSON: with only 647
+scored impressions, `bm25` leaves 2 cold-start and 9 head impressions, far too
+few for a CI to support any claim. Re-running on `popular` (94–97% recall) fixes
+this, since ~24,000 EB-NeRD impressions would be scored instead of 647. Slice
+denominators are exact, taken from the whole population rather than scaled from
+the scored share — both slices are computable without the model.
+
+### Diversity is not comparable across datasets — and the raw numbers invert
+
+Raw diversity reads EB-NeRD 0.037 against MIND 0.857, which looks like EB-NeRD
+recommending near-identical articles. It is an artefact of the embedding space.
+Measured over random article pairs:
+
+| | random-pair diversity | recommended | vs random |
+|---|---|---|---|
+| EB-NeRD (provided multilingual BERT, 768-d) | 0.0484 | 0.0372 | **0.769x** |
+| MIND (MiniLM, 384-d) | 0.9402 | 0.8566 | **0.911x** |
+
+Two *randomly chosen* EB-NeRD articles already have cosine 0.951: raw BERT
+vectors are anisotropic and occupy a narrow cone, while MiniLM is contrastively
+trained and spreads its space. So the 23x raw gap is the embedding model, and
+against its own yardstick **EB-NeRD's recommender concentrates more than MIND's**
+— the opposite of the raw reading. The JSON now carries
+`diversity_random_baseline` and `diversity_vs_random`; report the ratio, never
+the raw value across datasets.
+
+### Three bugs the first run surfaced
+
+Worth recording, because all three would have shipped silently:
+
+1. **Novelty was `inf`.** `popularity.parquet` lists every article ever
+   *displayed* in train (display_count was added for the CTR feature), so most
+   rows have click_count 0 and `-log2(0)` poisoned the mean and its whole CI.
+   Zero-count articles now fall through to the unseen-article prior.
+2. **The coverage CI excluded its own point estimate** — `[0.1535, 0.1588]`
+   beside a value of 0.1736. A bootstrap resample repeats ~1/e of the
+   impressions and so unions fewer distinct articles; the bias is inherent to
+   union statistics. A first-order bias correction re-centres the interval, with
+   the raw resample mean and the shift both reported so it stays auditable.
+3. **Slice denominators were estimated** by scaling the scored count by the
+   overall scored share — which assumes retrieval succeeds equally often in
+   every slice, exactly what a cold-start slice exists to test. Now exact.
+
+### Caveats
+
+- Beyond-accuracy is computed on a 2,000-impression sample, and **coverage is
+  conditional on that sample size** — scoring more impressions can only cover
+  more catalogue. The count is reported beside every such figure; do not compare
+  coverage across runs with different `--beyond-sample`.
+- Novelty is ~13 bits on both datasets, i.e. the recommended articles are rare
+  in the train click distribution. That is unsurprising for `bm25`, whose
+  candidates are catalogue-wide; expect it to fall on `popular`, which
+  deliberately recommends what is in circulation.
+- **Codabench submission is still outstanding** — Q5's fourth bullet.
+
+---
+
 ## 3. Open decisions
 
 - [x] ~~Sign-off on §1.4 (LambdaMART primary) and §2.6 (no cross-encoder).~~
@@ -1257,6 +1356,15 @@ as one.
   against a 100 ms SLA; feature building is ~85% of the request and the model ~7%.
   The shipped path carries no ANN index at all, and `article_stats_index` memory
   is what breaks first at 10x.
+- **2026-09-15** — Added §2H (Q5 extended evaluation): ported A1's
+  `beyond_accuracy`/`slicing`/`bootstrap` into `src/`, added
+  `scripts/extended_eval.py` and `results/extended_eval_<dataset>_<method>.json`.
+  All seven metrics with bootstrap CIs plus both slices. MIND cold-start users
+  score 46% below warm. Fixed three bugs the first run exposed: novelty `inf`
+  from zero-click articles, a coverage CI that excluded its own point estimate,
+  and estimated rather than exact slice denominators. Also established that raw
+  diversity is not comparable across datasets (embedding anisotropy) and added a
+  random-pair baseline.
 - **2026-09-11** — §2F "Results": both freshness arms trained and evaluated.
   EB-NeRD +0.0686 AUC / +0.0567 MRR / +0.0525 nDCG@10 over the §2C baseline
   (paired-bootstrap 95% CIs all clear of zero); MIND null on every metric. Traced

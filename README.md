@@ -20,5 +20,11 @@ Q4 serving and scale (§2G), writing `results/serving_<dataset>.json`:
 python scripts/serving_benchmark.py --dataset ebnerd    # memory, p50/p95/p99, QPS, cost, scaling
 ```
 
+Q5 extended evaluation (§2H), writing `results/extended_eval_<dataset>_<method>.json`:
+
+```bash
+python scripts/extended_eval.py --dataset ebnerd --method popular   # all 7 metrics, 2 slices, bootstrap CIs
+```
+
 Both reuse `src/metrics.py`, so they cannot drift from the `metrics_<split>.json`
 each run writes.
