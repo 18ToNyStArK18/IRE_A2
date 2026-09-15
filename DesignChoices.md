@@ -1339,6 +1339,107 @@ Worth recording, because all three would have shipped silently:
 
 ---
 
+## 2I. Q5/Q7.3 — Codabench submissions (2026-09-15)
+
+`run_submit.py` → `data/submissions/<dataset>_nrms_freshness.zip` (gitignored,
+which Q8 requires). Both files generated, format-verified, and ready to upload.
+
+| | inner file | lines | size | wall time |
+|---|---|---|---|---|
+| MIND (`MINDlarge_test`) | `prediction.txt` | 2,370,727 | 108.0 MB | 2.9 min |
+| EB-NeRD (`ebnerd_testset`) | `predictions.txt` | 13,536,710 | 229.8 MB | 4.2 min |
+
+Line counts match the official impression counts exactly. Both boards were open
+at the time of writing with **10 submissions/day** (checked against the Codabench
+API): MIND's "Official Test" phase and EB-NeRD's "official testset" phase are
+current with no end date. A1's "one upload per day" note referred to the closed
+RecSys '24 phase.
+
+### Why NRMS scores these and the re-ranker does not
+
+The boards score a ranking of each impression's **given in-view list**. The
+two-stage pipeline ranks a fresh pool it retrieves itself, and its click-driven
+features are empty on an unlabelled test set, so it has nothing to say about a
+list it did not choose. NRMS scores supplied candidates natively — that is the
+task it was trained on — so the freshness arm (§2F) produces both files.
+
+### The per-impression scorer could not have done this
+
+`evaluate.py` re-encodes every candidate and every history slot of every
+impression: measured at 282 (EB-NeRD) and 111 (MIND) impressions/s, the two test
+sets would have taken **~13.5 h and ~6 h**. `src/nrms/serve.py` encodes each
+catalogue once and gathers article vectors by row index, which is *exactly* the
+same computation — `NewsEncoder` has no context, no user and no position — and
+runs at 70,011 and 16,339 impressions/s, i.e. **4.2 and 2.9 minutes**.
+
+That claim is the only thing standing between a valid submission and 16M rows of
+quietly wrong ranking, so it is checked numerically rather than argued.
+`scripts/verify_fast_scorer.py` re-scores our own labelled test splits through
+the fast path and requires the committed metrics back:
+
+| | AUC | MRR | nDCG@5 | nDCG@10 |
+|---|---|---|---|---|
+| deviation from `metrics_test.json`, both datasets | 0.000000 | 0.000000 | 0.000000 | 0.000000 |
+
+This is also the honest answer to Q4's serving question for NRMS: serving it
+means a precomputed article-vector table plus per-request user encoding, not
+re-encoding the catalogue per request.
+
+### Reused from A1 rather than rewritten
+
+`src/submission.py` is a port of A1's `src/newsrec/predict.py`, which produced
+files the MIND leaderboard scored (bm25 0.5934, minilm 0.6425). Kept as-is: the
+streaming chunk iterators, the vectorised id→row resolution, `SubmissionWriter`
+with per-chunk resume, and `verify_submission`. **The formats came from the
+competition APIs in A1, not from guesswork** — different inner filenames per
+board, and integer ranks `1..n` with rank 1 highest rather than scores.
+
+Three things changed for A2:
+
+- `Chunk` carries each impression's own time, which A1's similarity scorer never
+  needed and the freshness arm cannot work without.
+- Catalogue text is concatenated per `TEXT_COLUMNS` (EB-NeRD title+subtitle+body,
+  MIND title+abstract) and tokenised with the same `padding="max_length"` and
+  `title_size` as training, so the news encoder sees text in the shape it learnt.
+- `n_history=0` now means "no history" instead of "all history". `[-0:]` slices
+  the *whole* list in Python, which crashed the first-seen pre-pass; the case is
+  branched on explicitly in both places.
+
+### Freshness references on the test sets
+
+Same definitions as `article_stats.freshness_reference_times`, sourced from the
+period being scored: EB-NeRD's real `published_time` (**125,541/125,541 articles,
+100%**), MIND's earliest sighting from one extra streaming pass over the test log
+(**30,043/120,961, 24.8%** — the rest never appear as candidates, so they are
+never scored). `FreshnessLookup.ages` still gates on the reference strictly
+preceding the impression, so a later sighting cannot date an earlier row.
+
+MIND's early impressions therefore read `known=0` while the window is cold. That
+is inherent to the proxy and nothing rides on it: MIND's freshness arm measured
+null offline (§2H).
+
+### Verification before upload
+
+- Line counts equal the official impression counts; `verify_submission`
+  stream-checks that every sampled line's ranks are a permutation of `1..n`.
+- Output was diffed against the source files directly — impression ids in file
+  order, and each line's rank count equal to that impression's candidate count
+  (50,000 MIND lines against `behaviors.tsv`, 5,000 EB-NeRD against
+  `behaviors.parquet`).
+- `tests/test_submission.py` pins the format rules and the fast scorer's padding
+  row.
+
+### Outstanding
+
+- **Upload both files and capture the leaderboard screenshots** (Q5 bullet 4,
+  Q7.3). Nothing else in this section needs a rerun.
+- A1's `mind_minilm.zip` remains on disk as an alternative. Its offline MIND AUC
+  (0.6296) looked higher than NRMS's (0.6040), though on A1's own split, so the
+  two are not strictly comparable. Leaderboard rank is not graded; submitting A2's
+  own pipeline is the point.
+
+---
+
 ## 3. Open decisions
 
 - [x] ~~Sign-off on §1.4 (LambdaMART primary) and §2.6 (no cross-encoder).~~
@@ -1360,6 +1461,8 @@ Worth recording, because all three would have shipped silently:
       Results): EB-NeRD +0.069 AUC (CI [+0.066, +0.071]), MIND null. Extra seeds
       judged unnecessary — the EB-NeRD effect dwarfs seed noise and MIND's null is
       explained by age-homogeneous candidate sets, not variance.
+- [x] ~~Generate the Codabench submission files.~~ **Done 2026-09-15** (§2I):
+      both verified and waiting to be uploaded; screenshots still needed.
 - [ ] Paired bootstrap 95% CIs for the §2E before/after deltas.
 - [ ] The Q1 feature-group ablation under the chosen random-negative sampling
       (§2E's candidate-level-only arm ran under the discarded hard negatives).
@@ -1449,3 +1552,11 @@ Worth recording, because all three would have shipped silently:
   random-pair baselines reproduced the other machine's to four decimals.
   MIND's near-random diversity sits opposite its 0.32% coverage — a small
   article set that is topically wide — so the two must be reported together.
+- **2026-09-15** — Added §2I (Q5/Q7.3 Codabench submissions): both files built and
+  verified — MIND 2,370,727 lines, EB-NeRD 13,536,710, matching the official
+  counts. Ported A1's leaderboard-validated submission plumbing into
+  `src/submission.py` and added `src/nrms/serve.py`, a cached-article-vector
+  scorer that is exactly equivalent to the per-impression path (zero deviation on
+  all four metrics for both arms, `scripts/verify_fast_scorer.py`) and turns
+  ~19.5 h of scoring into 7 min. Confirmed via the Codabench API that both boards
+  are open at 10 submissions/day. Upload and screenshots remain.

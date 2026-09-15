@@ -61,13 +61,17 @@ class FreshnessLookup:
     def ages(self, codes, impression_time_ns) -> tuple[np.ndarray, np.ndarray]:
         """(log1p(age in hours), known) as float32 arrays shaped like `codes`.
 
+        `impression_time_ns` is a scalar for the per-impression callers, or an
+        array broadcastable against `codes` for the submission scorer, which
+        dates a flat run of candidates from many impressions in one call.
+
         `known` is 0 wherever the article has no reference or its reference does
         not strictly precede the impression; `log_age` is 0 there too, so the
         head sees a consistent (0, 0) for "no information" rather than an
         arbitrary age paired with a zero flag.
         """
         reference = self.reference_ns[np.asarray(codes, dtype=np.int64)]
-        age_hours = (float(impression_time_ns) - reference) / _NS_PER_HOUR
+        age_hours = (np.asarray(impression_time_ns, dtype=np.float64) - reference) / _NS_PER_HOUR
         known = np.isfinite(age_hours) & (age_hours > 0)
         log_age = np.where(known, np.log1p(np.where(known, age_hours, 0.0)), 0.0)
         return log_age.astype(np.float32), known.astype(np.float32)

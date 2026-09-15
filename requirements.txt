@@ -17,6 +17,11 @@ scikit-learn>=1.4
 # --- re-ranker (Q2) ---
 lightgbm>=4.3
 
+# --- Codabench submissions (Q5/Q7) ---
+# The competition test sets are 2.37M and 13.5M impressions; polars streams the
+# catalogues and per-user histories that pandas would hold as Python objects.
+polars>=1.0
+
 # --- observability ---
 wandb>=0.17
 python-dotenv>=1.0

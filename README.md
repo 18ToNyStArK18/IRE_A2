@@ -26,5 +26,17 @@ Q5 extended evaluation (§2H), writing `results/extended_eval_<dataset>_<method>
 python scripts/extended_eval.py --dataset ebnerd --method popular   # all 7 metrics, 2 slices, bootstrap CIs
 ```
 
-Both reuse `src/metrics.py`, so they cannot drift from the `metrics_<split>.json`
+These reuse `src/metrics.py`, so they cannot drift from the `metrics_<split>.json`
 each run writes.
+
+Q5/Q7.3 Codabench submissions (§2I), writing `data/submissions/<dataset>_nrms_freshness.zip`:
+
+```bash
+python scripts/verify_fast_scorer.py --dataset ebnerd   # gate: fast scorer == committed metrics
+python run_submit.py --dataset mind --limit 5000        # smoke test
+python run_submit.py --dataset mind                     # full file, ~3 min
+python run_submit.py --dataset ebnerd                   # full file, ~4 min
+```
+
+The official test sets are not in this repo; `data/raw/testsets/` symlinks them,
+or pass `--test-root`.
