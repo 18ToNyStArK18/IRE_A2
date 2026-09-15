@@ -1071,6 +1071,128 @@ zero. Seeds 43/44 stay available
 
 ---
 
+## 2G. Q4 — serving and scale (2026-09-15)
+
+Measured with `scripts/serving_benchmark.py`, which writes
+`results/serving_<dataset>.json`. 300 timed requests after 50 warm-up, K=200,
+CPU only, single-threaded, on this laptop.
+
+### What counts as a request, and what does not
+
+Stage 1 is a 1-hour window over the display log. `FreshPool.advance_to(t)`
+replays the log forward, but a live system never does that inside a request — it
+maintains those counters as impressions arrive. Timing it would measure log
+catch-up, not serving, so it is excluded from request latency and reported
+separately (measured: **0.065 ms per impression**, so it would not have mattered
+either way). Session counters are treated the same way: a live system holds them
+in a session store, so sessionizing the split is startup here. This is a
+judgement call and is stated rather than buried.
+
+What *is* timed is what a request does against state already in memory: rank the
+current pool, build features for the top-K, score them.
+
+### Q4.2 Latency — p99 is ~10x inside the SLA
+
+| | stage 1 | stage 2a features | stage 2b scoring | **total** |
+|---|---|---|---|---|
+| EB-NeRD p50 / p99 | 0.33 / 0.56 | 4.23 / 8.12 | 0.37 / 0.60 | **4.95 / 9.15 ms** |
+| MIND p50 / p99 | 1.15 / 1.83 | 4.01 / 7.32 | 0.54 / 0.80 | **5.74 / 9.58 ms** |
+
+**Feature building is ~85% of the request; the model is ~7%.** That is the
+result worth carrying into the report, because the intuitive answer is the
+opposite. The GBDT is not the bottleneck — assembling its inputs is. Any latency
+work should target `build_candidate_features`, not the model.
+
+### Q4.3 Throughput and cost
+
+| | single-core QPS | p99 vs 100 ms SLA | USD / 1000 queries |
+|---|---|---|---|
+| EB-NeRD | 190.9 | 9.15 ms — **pass** | $0.000247 |
+| MIND | 165.1 | 9.58 ms — **pass** | $0.000286 |
+
+Priced at $0.17 per vCPU-hour with the core saturated; the rate is recorded in
+each JSON's `config` block so the figure can be re-derived. Real serving
+provisions for peak, so divide by target utilisation to size a fleet.
+
+### Q4.1 Index memory
+
+Each component built in its own process, because sequential in-process RSS
+deltas are contaminated by pandas freeing buffers — the first version of this
+script reported the article index at *minus* 126 MiB. `explicit_mib` is the
+exact array bytes; `rss_mib` includes Python object overhead and build
+transients.
+
+| component | EB-NeRD explicit | MIND explicit | in the shipped path? |
+|---|---|---|---|
+| `semantic_ann_index` | 34.5 MiB | **95.6 MiB** | no — `semantic` arm only |
+| `bm25_inverted_index` | 4.1 MiB | 36.0 MiB | no — `bm25` arm only |
+| `article_stats_index` | 4.8 MiB | 68.1 MiB | **yes** |
+| `fresh_pool_log` | 7.5 MiB | 26.5 MiB | offline replay only (see below) |
+| `behaviors_split` | 17.0 MiB | 35.4 MiB | offline only |
+| `lightgbm_booster` | 2.7 MiB rss | 3.1 MiB rss | **yes** |
+
+**The Q4 question "measure your ANN index" has an interesting answer: the shipped
+path has no ANN index.** Replacing similarity retrieval with a recency window
+(§2E) deleted the largest serving structure — 95.6 MiB on MIND — while taking
+recall from 2.90% to 93.9%. The serving footprint is now the fresh-pool window
+plus the article-statistics index.
+
+### Q4.4 Scaling to 10x — what breaks first
+
+Two measured curves, rather than assertion.
+
+**Latency is linear in K**, and features are the linear term:
+
+| K | EB-NeRD total | MIND total |
+|---|---|---|
+| 50 | 2.44 ms | 2.35 ms |
+| 100 | 3.21 ms | 3.41 ms |
+| 200 | 5.08 ms | 5.92 ms |
+
+So K is the latency knob: dropping to K=100 cuts request time ~37% and, per
+§2E's recall figures, costs little recall.
+
+**The article index grows with event volume**, which is the axis traffic moves
+along. MIND: 40.7 MiB over train, 68.1 MiB over all splits — at 8 bytes per
+event that is 8.9M events resident.
+
+Ranked by what gives out first:
+
+1. **`article_stats_index` memory — the binding constraint.** It must be
+   resident, and it grows with total events. 10x MIND-small traffic is ~680 MiB;
+   MINDlarge (~15M impressions against MIND-small's 230k, ~65x) is ~4.4 GB. The
+   module docstring already flagged that it "does not survive MINDlarge", and
+   this measurement puts a number on it. First thing to shard or to move to a
+   time-windowed counter store.
+2. **CPU for feature building.** 165–191 QPS per core, so 10x traffic is ~10
+   cores. Embarrassingly parallel across requests, so this is a cost line, not a
+   wall.
+3. **Nothing else.** The fresh-pool window is bounded by *one hour of traffic*,
+   not by catalogue size, so it grows with QPS and not with corpus age — a good
+   property that came free with §2E. The booster is ~3 MiB and scoring is 7% of
+   the request.
+
+Note `fresh_pool_log` (439 MiB RSS on MIND) is an artifact of offline replay: it
+holds every split's log so the benchmark can seek through time. A live system
+holds only the 1-hour window. It is not a serving cost and must not be reported
+as one.
+
+### Caveats
+
+- **The timed model is the `bm25` arm, not the shipped `popular` one**, which was
+  trained on the other machine. Tree count drives scoring latency (EB-NeRD 17
+  trees, MIND 80), but scoring is only ~7% of the request, so even a 5x larger
+  model moves p99 by ~2 ms and no conclusion here turns on it. Re-run where the
+  shipped model lives to make the number exact; each JSON records which file it
+  timed.
+- Single machine, CPU only, single-threaded. p99 from 300 requests is noisy at
+  the ~1 ms level (two EB-NeRD runs gave 12.1 and 9.2 ms); the SLA verdict has a
+  10x margin, so the noise does not threaten it.
+- NRMS is not in these numbers. It is a different serving profile (GPU, ~774 MiB
+  checkpoint) and is not part of the two-stage pipeline.
+
+---
+
 ## 3. Open decisions
 
 - [x] ~~Sign-off on §1.4 (LambdaMART primary) and §2.6 (no cross-encoder).~~
@@ -1130,6 +1252,11 @@ zero. Seeds 43/44 stay available
   (2) The arms trained on different data orders because the head's init consumed
   the global RNG; it is now built under `fork_rng`. Head parameter count
   corrected to 65.
+- **2026-09-15** — Added §2G (Q4 serving and scale): `scripts/serving_benchmark.py`
+  plus `results/serving_<dataset>.json`. p99 9.2 ms (EB-NeRD) / 9.6 ms (MIND)
+  against a 100 ms SLA; feature building is ~85% of the request and the model ~7%.
+  The shipped path carries no ANN index at all, and `article_stats_index` memory
+  is what breaks first at 10x.
 - **2026-09-11** — §2F "Results": both freshness arms trained and evaluated.
   EB-NeRD +0.0686 AUC / +0.0567 MRR / +0.0525 nDCG@10 over the §2C baseline
   (paired-bootstrap 95% CIs all clear of zero); MIND null on every metric. Traced

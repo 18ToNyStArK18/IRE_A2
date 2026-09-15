@@ -1,0 +1,145 @@
+{
+  "dataset": "ebnerd",
+  "split": "test",
+  "config": {
+    "k": 200,
+    "requests": 300,
+    "warmup": 30,
+    "sla_ms": 100.0,
+    "instance_usd_per_hour": 0.17,
+    "article_stats_splits": [
+      "train",
+      "val",
+      "test"
+    ],
+    "fresh_window_hours": 1,
+    "click_lag_minutes": 10
+  },
+  "notes": [
+    "'popular' model not on this machine; timed 'bm25' instead. Tree count drives scoring latency, so re-run where the shipped model lives."
+  ],
+  "memory": {
+    "behaviors_split": {
+      "rss_mib": 229.9,
+      "build_seconds": 1.31,
+      "explicit_mib": 17.0
+    },
+    "articles_lookup": {
+      "rss_mib": 34.6,
+      "build_seconds": 0.06
+    },
+    "article_stats_index": {
+      "rss_mib": 84.0,
+      "build_seconds": 0.74,
+      "explicit_mib": 4.8
+    },
+    "fresh_pool_log": {
+      "rss_mib": 83.0,
+      "build_seconds": 0.51,
+      "explicit_mib": 7.5
+    },
+    "fresh_pool_windows": {
+      "rss_mib": 0.0,
+      "build_seconds": 0.0
+    },
+    "lightgbm_booster": {
+      "rss_mib": 2.7,
+      "build_seconds": 0.01
+    },
+    "bm25_inverted_index": {
+      "rss_mib": 216.1,
+      "build_seconds": 1.46,
+      "explicit_mib": 4.1
+    },
+    "semantic_ann_index": {
+      "rss_mib": 267.7,
+      "build_seconds": 1.66,
+      "explicit_mib": 34.5
+    },
+    "_method": "Each component is built in its own process; rss_mib is the resident-set growth attributable to it once its dependencies are already loaded, and explicit_mib is the exact array/frame bytes where they are walkable. bm25_inverted_index and semantic_ann_index belong to the stage-1 ablation arms: the shipped `popular` path loads neither, which is why its serving footprint is the fresh-pool window plus the article statistics index."
+  },
+  "model": {
+    "path": "processed/ebnerd/reranker/lambdamart_bm25.txt",
+    "num_trees": 17,
+    "num_features": 22
+  },
+  "latency": {
+    "stage1_candidate_generation": {
+      "p50_ms": 0.329,
+      "p95_ms": 0.445,
+      "p99_ms": 0.555,
+      "mean_ms": 0.331
+    },
+    "stage2a_feature_building": {
+      "p50_ms": 4.225,
+      "p95_ms": 6.728,
+      "p99_ms": 8.119,
+      "mean_ms": 4.511
+    },
+    "stage2b_model_scoring": {
+      "p50_ms": 0.372,
+      "p95_ms": 0.537,
+      "p99_ms": 0.602,
+      "mean_ms": 0.397
+    },
+    "total_request": {
+      "p50_ms": 4.953,
+      "p95_ms": 7.522,
+      "p99_ms": 9.153,
+      "mean_ms": 5.239
+    },
+    "ingest_per_impression_excluded_from_request": {
+      "p50_ms": 0.054,
+      "p95_ms": 0.136,
+      "p99_ms": 0.246,
+      "mean_ms": 0.064
+    },
+    "candidates_per_request_mean": 200.0,
+    "n_requests": 300
+  },
+  "throughput_and_cost": {
+    "single_core_qps": 190.9,
+    "p99_ms": 9.153,
+    "meets_sla": true,
+    "sla_ms": 100.0,
+    "usd_per_1000_queries": 0.000247,
+    "_method": "Single-threaded, one request at a time, so QPS is per core and scales with cores until memory or ingest becomes the limit. Cost assumes the core is saturated; real serving provisions for peak, so divide by the target utilisation to size a fleet."
+  },
+  "scaling": {
+    "latency_vs_k": {
+      "k=50": {
+        "total_ms_mean": 2.444,
+        "stage2a_ms_mean": 1.986,
+        "stage2b_ms_mean": 0.292
+      },
+      "k=100": {
+        "total_ms_mean": 3.208,
+        "stage2a_ms_mean": 2.687,
+        "stage2b_ms_mean": 0.329
+      },
+      "k=200": {
+        "total_ms_mean": 5.08,
+        "stage2a_ms_mean": 4.377,
+        "stage2b_ms_mean": 0.41
+      }
+    },
+    "article_index_vs_event_volume": {
+      "train": {
+        "rss_delta_mib": 4.7,
+        "explicit_mib": 2.1,
+        "distinct_articles": 2350
+      },
+      "train+val": {
+        "rss_delta_mib": 5.4,
+        "explicit_mib": 2.3,
+        "distinct_articles": 2478
+      },
+      "train+val+test": {
+        "rss_delta_mib": 2.9,
+        "explicit_mib": 4.8,
+        "distinct_articles": 3729
+      }
+    },
+    "_method": "latency_vs_k isolates what grows with candidate count (feature building and scoring); article_index_vs_event_volume grows the event log instead, which is the axis 10x traffic moves along."
+  }
+}

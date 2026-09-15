@@ -14,5 +14,11 @@ python scripts/age_signal.py --dataset mind                    # how much signal
 python scripts/age_signal.py --dataset ebnerd --reference first-seen   # what MIND's proxy costs
 ```
 
+Q4 serving and scale (§2G), writing `results/serving_<dataset>.json`:
+
+```bash
+python scripts/serving_benchmark.py --dataset ebnerd    # memory, p50/p95/p99, QPS, cost, scaling
+```
+
 Both reuse `src/metrics.py`, so they cannot drift from the `metrics_<split>.json`
 each run writes.
