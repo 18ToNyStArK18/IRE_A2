@@ -877,6 +877,10 @@ while the existing baseline path stays backwards compatible. Shared caches
 
 ### Predictions to check against when the runs land
 
+*(Both runs landed 2026-09-11 — see "Results" below. Prediction 1 was right in
+direction and wrong in mechanism; prediction 2 was overtaken by the effect size
+on EB-NeRD.)*
+
 - **Expect an asymmetry.** EB-NeRD has a real `published_time`; MIND has only the
   first-seen proxy, so a weaker and noisier result there is the prediction, not a
   bug — and it would mirror §2D's Finding 3 exactly, giving one coherent story
@@ -948,6 +952,90 @@ said.
 them, only EB-NeRD's age signal was sound, and neither dataset had matched data
 order.
 
+### Results (2026-09-11) — trained on the RTX 5050 machine
+
+Both arms, both datasets, same seed (42), same epoch caps and same test splits as
+the §2C baselines. Every run early-stopped inside its cap, so no comparison is
+confounded by one arm simply training longer. W&B: `rn5oq50v` (EB-NeRD),
+`050iyvjo` (MIND).
+
+| test split | EB-NeRD base | EB-NeRD +fresh | Δ (95% CI) | MIND base | MIND +fresh | Δ (95% CI) |
+|---|---|---|---|---|---|---|
+| AUC | 0.5425 | **0.6112** | **+0.0686** [+0.0662, +0.0710] | 0.6040 | 0.6042 | +0.0002 [−0.0006, +0.0010] |
+| MRR | 0.3394 | **0.3962** | +0.0567 [+0.0538, +0.0595] | 0.2750 | 0.2743 | −0.0007 [−0.0014, +0.0001] |
+| nDCG@5 | 0.3770 | **0.4427** | +0.0657 [+0.0628, +0.0685] | 0.2961 | 0.2949 | −0.0012 [−0.0021, −0.0003] |
+| nDCG@10 | 0.4570 | **0.5095** | +0.0525 [+0.0501, +0.0548] | 0.3617 | 0.3610 | −0.0007 [−0.0015, +0.0001] |
+| best val AUC | 0.5779 | 0.6407 | +0.0629 | 0.6585 | 0.6612 | +0.0027 |
+| epochs (cap) | 15/20 | 15/20 | — | 8/10 | 8/10 | — |
+| wall time | 23 min | 18 min | — | 77 min | 52 min | — |
+| peak GPU train / eval | 3,869 / 2,893 MiB | 3,872 / 2,894 MiB | — | 780 / 4,544 MiB | 785 / 4,546 MiB | — |
+
+CIs are a paired bootstrap over test **impressions** (2,000 resamples, seed 0,
+both models held fixed), scoring the identical impression population both sides —
+so they bound sampling noise in the test set, **not** training variance.
+
+**EB-NeRD: a large, unambiguous gain.** +0.069 AUC, with the CI nowhere near
+zero and per-impression win/tie/loss of 46.2% / 35.1% / 18.6%. It is visible from
+epoch 1 (val AUC 0.5795 vs 0.5452), which is what the zero-init property
+predicts: the arms start bit-identical, so the gap can only be learned.
+
+**MIND: no effect.** Every delta is within a few ten-thousandths and the AUC CI
+spans zero; per impression the arms win and lose about equally (32.0% / 38.3% /
+29.7%). Only nDCG@5's CI excludes zero, as a *loss* of 0.0012 — one marginal
+exclusion across four correlated metrics, and not a result worth a story.
+
+### Why MIND gained nothing — not the coverage bug, the candidate sets
+
+The obvious suspect is the bug fixed above, but the coverage is now fine:
+**99.9%** of MIND test candidates and 99.9% of test clicks carry an age. (The
+run log's "34.9% of catalogue articles" is a different and harmless number —
+most catalogue articles never appear in a behaviour log at all; the ones actually
+shown are dated.) The real cause is that **age barely separates clicks on MIND**,
+measured on the test split of each dataset:
+
+| test split | EB-NeRD | MIND |
+|---|---|---|
+| AUC of the learned head used *alone* as a ranker | **0.6765** | **0.5142** |
+| median age, clicked vs not-clicked | 3.1 h vs 4.7 h | 15.0 h vs 16.5 h |
+| median within-impression age spread (std) | **1,057 h** | **27.5 h** |
+| candidates / clicks carrying an age | 100% / 100% | 99.9% / 99.9% |
+
+EB-NeRD impressions mix minutes-old articles with weeks-old ones, so age
+discriminates strongly. MIND impressions are internally near-uniform in age, and
+an additive term that is nearly constant across a row cannot reorder it. The
+learned curves agree: EB-NeRD's peaks at ~6 h and falls away on both sides
+(−0.43 at 15 min, −0.81 at 30 d, relative to the peak), while MIND's is
+monotone and shallow (−0.10 at 1 h to −1.36 at 30 d, with `known=0` scored like
+the freshest bucket).
+
+So §2F's asymmetry prediction held, **but not for the stated reason**. It is not
+that MIND's first-seen proxy is noisier than a real `published_time`; it is that
+MIND's in-view sets are age-homogeneous, so there is little age signal to
+extract. This is §2D Finding 3 in a new guise — feature value tracks what the
+dataset's candidate sets actually vary in.
+
+### The honest caveat for the report
+
+On EB-NeRD the head **alone** ranks at AUC 0.6765, above the full freshness NRMS
+at 0.6112. Age is simply a stronger signal on this split than NRMS's title
+encoder, whose §2C baseline sits at 0.5425 and whose val loss rises from epoch 6
+while train loss keeps falling; mixing the two dilutes the stronger one.
+
+**"Freshness weighting improves NRMS by +0.069 AUC on EB-NeRD" is true and
+correctly measured**, and the ablation is clean by construction (identical init,
+identical data order, 65 parameters). But it must be reported next to the
+age-only number, or it overstates what the *model* contributes. It is the same
+lesson as §2B, where freshness alone reached AUC 0.8475 with no model at all.
+
+### Seed count — resolved
+
+§2F flagged that one seed per arm cannot separate a small gain from seed noise.
+EB-NeRD's +0.069 is an order of magnitude larger than plausible seed-to-seed
+variation, so extra seeds are not needed to support the claim. MIND's null is
+likewise not a seed question: the diagnostic above shows there is no signal to
+find, and repeating it would only re-measure zero. Seeds 43/44 stay available
+(`--seed 43 --run-tag freshness_s43`) if a reviewer asks.
+
 ---
 
 ## 3. Open decisions
@@ -967,8 +1055,10 @@ order.
       improvement is **freshness weighting on NRMS**, which improves the actual
       baseline rather than the re-ranker, so "reproduce then beat it" compares
       like with like.
-- [ ] Run the §2F arms (separate machine) and decide on seed count: one seed per
-      arm cannot separate a small gain from seed noise.
+- [x] ~~Run the §2F arms and decide on seed count.~~ **Done 2026-09-11** (§2F
+      Results): EB-NeRD +0.069 AUC (CI [+0.066, +0.071]), MIND null. Extra seeds
+      judged unnecessary — the EB-NeRD effect dwarfs seed noise and MIND's null is
+      explained by age-homogeneous candidate sets, not variance.
 - [ ] Paired bootstrap 95% CIs for the §2E before/after deltas.
 - [ ] The Q1 feature-group ablation under the chosen random-negative sampling
       (§2E's candidate-level-only arm ran under the discarded hard negatives).
@@ -1007,3 +1097,11 @@ order.
   (2) The arms trained on different data orders because the head's init consumed
   the global RNG; it is now built under `fork_rng`. Head parameter count
   corrected to 65.
+- **2026-09-11** — §2F "Results": both freshness arms trained and evaluated.
+  EB-NeRD +0.0686 AUC / +0.0567 MRR / +0.0525 nDCG@10 over the §2C baseline
+  (paired-bootstrap 95% CIs all clear of zero); MIND null on every metric. Traced
+  MIND's null to age-homogeneous in-view sets (learned head alone ranks at AUC
+  0.514 on MIND vs 0.677 on EB-NeRD; within-impression age spread 27.5 h vs
+  1,057 h), **not** to the corrected coverage bug — 99.9% of MIND test candidates
+  are dated. Recorded the caveat that EB-NeRD's age-only ranker (0.677) beats the
+  full freshness NRMS (0.611). Seed-count decision closed.
