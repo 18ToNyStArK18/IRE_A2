@@ -1,0 +1,196 @@
+{
+  "dataset": "ebnerd",
+  "method": "popular",
+  "split": "test",
+  "model": {
+    "path": "lambdamart_popular.txt",
+    "num_trees": 99
+  },
+  "config": {
+    "top_k": 10,
+    "chunk_impressions": 5000,
+    "beyond_sample": 2000,
+    "resamples": 1000,
+    "seed": 42,
+    "cold_start_threshold": 5,
+    "head_fraction": 0.2
+  },
+  "accuracy": {
+    "overall": {
+      "auc": {
+        "mean": 0.9213333861853451,
+        "ci_lower": 0.91986849399517,
+        "ci_upper": 0.9227275338827542,
+        "n": 24591
+      },
+      "mrr": {
+        "mean": 0.21021189611437655,
+        "ci_lower": 0.20704085195295494,
+        "ci_upper": 0.213613272899587,
+        "n": 25356
+      },
+      "ndcg@5": {
+        "mean": 0.20072405220425524,
+        "ci_lower": 0.1969130881050558,
+        "ci_upper": 0.20490725976761112,
+        "n": 25356
+      },
+      "ndcg@10": {
+        "mean": 0.2690590708072961,
+        "ci_lower": 0.2654647191768857,
+        "ci_upper": 0.2728324015321876,
+        "n": 25356
+      }
+    },
+    "slices": {
+      "cold_start_vs_warm": {
+        "cold_start": {
+          "auc": {
+            "mean": 0.9442589794348589,
+            "ci_lower": 0.9226103321580709,
+            "ci_upper": 0.9604986470815616,
+            "n": 65
+          },
+          "mrr": {
+            "mean": 0.27328565630346185,
+            "ci_lower": 0.20056701056204615,
+            "ci_upper": 0.3552984993630552,
+            "n": 67
+          },
+          "ndcg@5": {
+            "mean": 0.26986859214549613,
+            "ci_lower": 0.1852964808603723,
+            "ci_upper": 0.35855061419640993,
+            "n": 67
+          },
+          "ndcg@10": {
+            "mean": 0.3298921227573264,
+            "ci_lower": 0.2496128976028748,
+            "ci_upper": 0.41461411926342195,
+            "n": 67
+          },
+          "n_scored_impressions": 65,
+          "n_population_impressions": 67
+        },
+        "warm": {
+          "auc": {
+            "mean": 0.9212726276612798,
+            "ci_lower": 0.9198175477249131,
+            "ci_upper": 0.9226366262318617,
+            "n": 24526
+          },
+          "mrr": {
+            "mean": 0.2100447901816521,
+            "ci_lower": 0.20669008723368892,
+            "ci_upper": 0.2134057648381277,
+            "n": 25289
+          },
+          "ndcg@5": {
+            "mean": 0.20054086251007738,
+            "ci_lower": 0.19680539875299294,
+            "ci_upper": 0.20464674793383922,
+            "n": 25289
+          },
+          "ndcg@10": {
+            "mean": 0.2688979013470307,
+            "ci_lower": 0.26512381041444755,
+            "ci_upper": 0.27275645919203506,
+            "n": 25289
+          },
+          "n_scored_impressions": 24526,
+          "n_population_impressions": 25289
+        }
+      },
+      "head_vs_tail": {
+        "head": {
+          "auc": {
+            "mean": 0.5271442683502986,
+            "ci_lower": 0.49744341364944383,
+            "ci_upper": 0.5551840398574065,
+            "n": 117
+          },
+          "mrr": {
+            "mean": 0.007188131063939174,
+            "ci_lower": 0.006169216289583987,
+            "ci_upper": 0.008152985593482534,
+            "n": 197
+          },
+          "ndcg@5": {
+            "mean": 0.0,
+            "ci_lower": 0.0,
+            "ci_upper": 0.0,
+            "n": 197
+          },
+          "ndcg@10": {
+            "mean": 0.0,
+            "ci_lower": 0.0,
+            "ci_upper": 0.0,
+            "n": 197
+          },
+          "n_scored_impressions": 117,
+          "n_population_impressions": 197
+        },
+        "tail": {
+          "auc": {
+            "mean": 0.9232178401686212,
+            "ci_lower": 0.9217989864708132,
+            "ci_upper": 0.9246217553417349,
+            "n": 24474
+          },
+          "mrr": {
+            "mean": 0.21180161278494913,
+            "ci_lower": 0.2083882063081408,
+            "ci_upper": 0.21501711306394894,
+            "n": 25159
+          },
+          "ndcg@5": {
+            "mean": 0.20229576166346416,
+            "ci_lower": 0.1982028471087264,
+            "ci_upper": 0.20620630229288792,
+            "n": 25159
+          },
+          "ndcg@10": {
+            "mean": 0.27116585712428154,
+            "ci_lower": 0.2673450512880929,
+            "ci_upper": 0.2748977621894889,
+            "n": 25159
+          },
+          "n_scored_impressions": 24474,
+          "n_population_impressions": 25159
+        }
+      }
+    },
+    "n_impressions_total": 25356,
+    "n_impressions_scored": 24591
+  },
+  "beyond_accuracy": {
+    "diversity": {
+      "mean": NaN,
+      "ci_lower": NaN,
+      "ci_upper": NaN,
+      "n": 0
+    },
+    "diversity_random_baseline": NaN,
+    "diversity_vs_random": NaN,
+    "_diversity_unavailable": true,
+    "_diversity_note": "Raw diversity is not comparable across datasets: it is dominated by how anisotropic the embedding space is. A random EB-NeRD pair scores ~0.049 (provided multilingual BERT, vectors in a narrow cone) and a random MIND pair ~0.945 (MiniLM, contrastively trained). Read diversity_vs_random, where 1.0 means 'as diverse as picking at random' and below 1.0 means the recommender concentrates.",
+    "novelty": {
+      "mean": 14.457029204715825,
+      "ci_lower": 14.456325856002412,
+      "ci_upper": 14.457380879072533,
+      "n": 2000
+    },
+    "coverage": {
+      "value": 0.06792901418018171,
+      "ci_lower": 0.06724539356372593,
+      "ci_upper": 0.06843627409357224,
+      "n": 2000,
+      "resample_mean_uncorrected": 0.06708423197758341,
+      "bias_shift_applied": 0.0008447822025983015
+    },
+    "top_k": 10,
+    "catalogue_size": 11777,
+    "n_impressions_sampled": 2000,
+    "_note": "Computed on a sample of impressions, so coverage is conditional on n_impressions_sampled -- scoring more impressions can only cover more catalogue. Diversity and novelty are per-impression means and are not."
+  }
+}

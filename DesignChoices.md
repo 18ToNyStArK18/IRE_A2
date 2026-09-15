@@ -1200,49 +1200,78 @@ A1's `beyond_accuracy.py`, `slicing.py` and `bootstrap.py` are now ported into
 `src/` (the §1.4 decision to run one harness on A2's metrics API), so every
 figure reuses `src/metrics.py` and cannot drift from `report_<method>_<split>.json`.
 
-Run below on the **`bm25`** arm, the strongest trained model on this laptop; the
-shipped `popular` models live on the training machine. The script is
-method-agnostic — `--method popular` reproduces this for the shipped pipeline.
+Run on the shipped **`popular`** arm for both datasets. The first version of
+this section reported the `bm25` arm, which was the only model on the machine it
+was written on; those numbers are kept below as a contrast because the gap
+between them is itself the §2E result.
 
 ### Results, test split, top-10 for beyond-accuracy
 
-| | EB-NeRD/bm25 | MIND/bm25 |
-|---|---|---|
-| AUC | 0.9787 [0.9696, 0.9863] | 0.9698 [0.9660, 0.9734] |
-| MRR | 0.0194 [0.0179, 0.0210] | 0.0189 [0.0179, 0.0198] |
-| nDCG@5 | 0.0202 [0.0187, 0.0219] | 0.0199 [0.0190, 0.0209] |
-| nDCG@10 | 0.0204 [0.0190, 0.0220] | 0.0206 [0.0196, 0.0216] |
-| diversity | 0.0372 [0.0358, 0.0385] | 0.8566 [0.8530, 0.8607] |
-| novelty | 13.05 [13.01, 13.09] | 13.57 [13.48, 13.65] |
-| coverage | 0.1736 [0.1710, 0.1762] | 0.0639 [0.0628, 0.0650] |
-| impressions scored / total | 647 / 25,356 | 2,120 / 73,152 |
+| | EB-NeRD/popular | MIND/popular | EB-NeRD/bm25 | MIND/bm25 |
+|---|---|---|---|---|
+| AUC | 0.9213 [0.9199, 0.9227] | 0.8799 [0.8786, 0.8813] | 0.9787 | 0.9698 |
+| MRR | 0.2102 [0.2070, 0.2136] | 0.2239 [0.2219, 0.2260] | 0.0194 | 0.0189 |
+| nDCG@5 | **0.2007** [0.1969, 0.2049] | **0.2450** [0.2427, 0.2475] | 0.0202 | 0.0199 |
+| nDCG@10 | 0.2691 [0.2655, 0.2728] | 0.2980 [0.2958, 0.3004] | 0.0204 | 0.0206 |
+| diversity | not measurable here | not measurable here | 0.0372 | 0.8566 |
+| novelty | 14.46 [14.456, 14.457] | 17.29 [17.269, 17.311] | 13.05 | 13.57 |
+| coverage | 0.0679 [0.0672, 0.0684] | 0.0032 [0.0031, 0.0033] | 0.1736 | 0.0639 |
+| impressions scored / total | **24,591 / 25,356** | **68,682 / 73,152** | 647 / 25,356 | 2,120 / 73,152 |
 
-Accuracy is averaged over the **full** population — only positive-bearing
-impressions are scored, which is exact, not a shortcut (§2E, tested). The AUC is
-the inflated catalogue-negatives figure §2B explains, not a like-for-like number
-against NRMS.
+Accuracy reconciles exactly with `report_popular_test.json`, which is the point
+of reusing `src/metrics.py` on both paths. Averaged over the **full** population:
+only positive-bearing impressions are scored, which is exact, not a shortcut
+(§2E, tested). AUC is the inflated catalogue-negatives figure §2B explains, not a
+like-for-like number against NRMS — and note it *falls* from bm25's 0.98 to 0.92
+while nDCG rises 10x, which is that section's warning in one line.
+
+**The 10x nDCG gap is recall, not ranking.** `bm25` retrieves the clicked article
+for 2.6% of EB-NeRD impressions; `popular` does for 97%. A re-ranker cannot rank
+what stage 1 never handed it, so the earlier figures measured the discarded arm's
+recall ceiling. Anything quoted from this section must name the arm.
 
 ### Slices (nDCG@5)
 
 | | cold-start | warm | head | tail |
 |---|---|---|---|---|
-| EB-NeRD | 0.0299 (n=2 ⚠) | 0.0202 (n=645) | 0.0128 (n=9 ⚠) | 0.0203 (n=638) |
-| MIND | **0.0117** (n=232) | **0.0217** (n=1,888) | 0.0279 (n=565) | 0.0188 (n=1,555) |
+| EB-NeRD | 0.2699 (n=65 ⚠) | 0.2005 (n=24,526) | **0.0000** (n=117) | 0.2023 (n=24,474) |
+| MIND | **0.2580** (n=12,171) | **0.2422** (n=56,511) | **0.1605** (n=8,370) | 0.2571 (n=60,312) |
 
-**MIND cold-start users are ~46% worse than warm ones** (0.0117 vs 0.0217), on
-slices large enough to mean something. That is the expected direction — a
-history-driven re-ranker has least to work with when there is least history —
-but it is now measured rather than assumed, and it is the strongest argument for
-the cold-start handling the fresh pool already provides at stage 1.
+Slice denominators are exact, taken from the whole population rather than scaled
+from the scored share; both slices are computable without the model.
 
-EB-NeRD's slices are marked ⚠ and carry a `warning` in the JSON: with only 647
-scored impressions, `bm25` leaves 2 cold-start and 9 head impressions, far too
-few for a CI to support any claim. Re-running on `popular` (94–97% recall) fixes
-this, since ~24,000 EB-NeRD impressions would be scored instead of 647. Slice
-denominators are exact, taken from the whole population rather than scaled from
-the scored share — both slices are computable without the model.
+**Correction — cold-start is not worse, it is slightly better.** The `bm25`
+version of this section reported MIND cold-start users scoring ~46% below warm
+(0.0117 vs 0.0217) and read it as the expected weakness of a history-driven
+re-ranker. On the shipped arm the sign reverses: **cold-start 0.2580 vs warm
+0.2422**, ~6.5% better, on 12,171 scored impressions. EB-NeRD points the same way
+(0.2699 vs 0.2005), though its cold-start population is only 67 impressions and
+is marked ⚠. The explanation is that the shipped pipeline is not history-driven:
+stage 1 is a one-hour popularity window and the model leans on freshness and
+popularity, so a user with no history loses little. The earlier reading was an
+artefact of the arm, and it would have gone into the report as a finding.
+
+**EB-NeRD's re-ranker is at chance on head articles.** The head slice scores
+nDCG@5 and nDCG@10 of exactly 0.0000, AUC 0.5271 and MRR 0.0072 — the clicked
+article sits around rank 139 of 200. That is not a bug: the EB-NeRD model puts
+80–87% of its importance on `freshness_log_hours` (§2B/§2D), and "head" means
+most-clicked *in train*, i.e. old. The model systematically buries exactly those
+articles. MIND shows the same direction with a working model (head 0.1605 vs tail
+0.2571, AUC 0.8334 vs 0.8864).
+
+Two supporting facts worth reporting beside it: head-clicked impressions are only
+197 of 25,356 on EB-NeRD (0.8%) against 9,150 of 73,152 on MIND (12.5%) — EB-NeRD's
+test clicks land almost entirely on articles that were not popular in train, which
+is the news cycle turning over — and stage 1 retrieves the positive for 117/197 of
+them, so the failure is the ranker's, not retrieval's.
 
 ### Diversity is not comparable across datasets — and the raw numbers invert
+
+*(Measured on the `bm25` arm. Diversity is the one metric needing the semantic
+feature store, which this machine never built — `scripts/extended_eval.py` now
+reports it as unavailable and still produces novelty and coverage, rather than
+failing the whole run. Re-run on a machine with `feature_store/embeddings.parquet`
+to fill the two `popular` cells above.)*
 
 Raw diversity reads EB-NeRD 0.037 against MIND 0.857, which looks like EB-NeRD
 recommending near-identical articles. It is an artefact of the embedding space.
@@ -1284,10 +1313,21 @@ Worth recording, because all three would have shipped silently:
   conditional on that sample size** — scoring more impressions can only cover
   more catalogue. The count is reported beside every such figure; do not compare
   coverage across runs with different `--beyond-sample`.
-- Novelty is ~13 bits on both datasets, i.e. the recommended articles are rare
-  in the train click distribution. That is unsurprising for `bm25`, whose
-  candidates are catalogue-wide; expect it to fall on `popular`, which
-  deliberately recommends what is in circulation.
+- **Novelty rose on `popular` rather than falling** (13.05 → 14.46 EB-NeRD,
+  13.57 → 17.29 MIND), against the prediction written here for the `bm25` run.
+  The reason is definitional: novelty is `-log2(train click probability)`, and
+  fresh-pool articles are recent, so most have no train clicks at all and score
+  as maximally novel by construction. On this pipeline the metric is measuring
+  recency, not editorial novelty. Report it with that caveat or not at all.
+- **Coverage is the real cost of the recall fix.** EB-NeRD 0.1736 → 0.0679 and
+  MIND 0.0639 → **0.0032**: the shipped pipeline recommends from a one-hour
+  window, so it touches 0.32% of MIND's catalogue. That is the honest trade for
+  taking recall@200 from 2.90% to 93.9% (§2E), and it belongs in the report as a
+  trade rather than being quietly dropped.
+- Accuracy is scored a chunk of impressions at a time
+  (`--chunk-impressions`, default 5,000, mirroring `reranker.evaluate_over_population`).
+  MIND's 73k impressions x 200 candidates is ~14.6M feature rows, which OOM'd this
+  laptop as a single frame; chunked it is exact and peaks around one chunk.
 - **Codabench submission is still outstanding** — Q5's fourth bullet.
 
 ---
@@ -1383,3 +1423,15 @@ Worth recording, because all three would have shipped silently:
   (~6 h), not recency: newest-first ranks at AUC 0.4950, chance. Moved the
   analysis into `scripts/paired_bootstrap.py` and `scripts/age_signal.py` so
   every figure in §2F Results is reproducible.
+- **2026-09-15** — §2H re-run on the shipped `popular` arm for both datasets; the
+  first version reported `bm25`, the discarded stage-1 arm, whose 2.6%/2.9%
+  retrieval recall put nDCG@5 10x low (0.0202 → 0.2007 EB-NeRD, 0.0199 → 0.2450
+  MIND) and left EB-NeRD's slices at n=2 and n=9. Two findings changed with it:
+  cold-start users are ~6.5% **better** than warm, not 46% worse (the shipped
+  pipeline is freshness/popularity-driven, not history-driven), and EB-NeRD's
+  re-ranker is at chance on head articles (nDCG 0.0000, AUC 0.5271) because it
+  is essentially a freshness model and "head" means popular in train, i.e. old.
+  Coverage fell to 0.32% of MIND's catalogue — the trade for the §2E recall fix.
+  `extended_eval.py` now chunks the accuracy pass (MIND OOM'd at ~14.6M feature
+  rows) and degrades diversity gracefully where the semantic feature store is
+  absent.

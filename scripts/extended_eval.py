@@ -68,10 +68,56 @@ def load_popularity(processed_dir) -> dict[str, int]:
     return dict(zip(pop["article_id"], pop["click_count"]))
 
 
+SCORE_ROW_BLOCK = 500_000
+
+
 def score_matrix(matrix: pd.DataFrame, booster, features) -> pd.DataFrame:
-    out = matrix.copy()
-    out["model_score"] = booster.predict(out[features].astype(np.float64))
-    return out
+    """Add `model_score` in place, predicting in row blocks.
+
+    `build_matrix` already returns a fresh frame, so copying it here only
+    doubles peak memory, and `matrix[features].astype(np.float64)` materialises
+    a third copy of the whole feature block. On MIND that is ~14.6M rows x 30
+    features x 8 bytes per copy, which is what pushed an earlier run into the
+    OOM killer on this laptop.
+    """
+    scores = np.empty(len(matrix), dtype=np.float64)
+    for start in range(0, len(matrix), SCORE_ROW_BLOCK):
+        stop = min(start + SCORE_ROW_BLOCK, len(matrix))
+        block = matrix.iloc[start:stop][features].to_numpy(dtype=np.float64)
+        scores[start:stop] = booster.predict(block)
+    matrix["model_score"] = scores
+    return matrix
+
+
+def accuracy_rows_chunked(processed_dir, args, article_index, booster, features, cold_map, head_map):
+    """Per-impression metrics, built a chunk of impressions at a time.
+
+    Mirrors `reranker.evaluate_over_population`, which chunks for the same
+    reason and documents that chunking is exact here: every candidate of every
+    scored impression is kept, and no feature depends on rows outside its own
+    impression. Only the small per-impression metric rows are retained, so peak
+    memory is one chunk's feature matrix rather than the whole split's.
+    """
+    impression_ids = np.array(sorted(reranker.true_clicks(processed_dir, args.split)))
+    rows = []
+    for start in range(0, len(impression_ids), args.chunk_impressions):
+        chunk = set(impression_ids[start : start + args.chunk_impressions].tolist())
+        matrix = reranker.build_matrix(
+            processed_dir, args.dataset, args.split, args.method, article_index,
+            positives_only=True, impressions=chunk,
+        )
+        if matrix.empty:
+            continue
+        score_matrix(matrix, booster, features)
+        for impression_id, block in matrix.groupby("impression_id", sort=False):
+            metrics = per_impression_accuracy(
+                block["label"].to_numpy(dtype=np.float64), block["model_score"].to_numpy()
+            )
+            metrics["_cold_warm"] = cold_map.get(impression_id)
+            metrics["_head_tail"] = head_map.get(impression_id)
+            rows.append(metrics)
+        del matrix
+    return pd.DataFrame(rows)
 
 
 MIN_SLICE_IMPRESSIONS = 30  # below this a bootstrap CI is not worth reading
@@ -101,16 +147,8 @@ def population_slices(processed_dir, split: str, head_set) -> tuple[dict, dict]:
     return cold, head
 
 
-def accuracy_section(scored: pd.DataFrame, n_total: int, cold_map, head_map, args) -> dict:
-    """Per-impression metrics, overall and by slice, each with a bootstrap CI."""
-    rows = []
-    for impression_id, block in scored.groupby("impression_id", sort=False):
-        labels = block["label"].to_numpy(dtype=np.float64)
-        metrics = per_impression_accuracy(labels, block["model_score"].to_numpy())
-        metrics["_cold_warm"] = cold_map.get(impression_id)
-        metrics["_head_tail"] = head_map.get(impression_id)
-        rows.append(metrics)
-    frame = pd.DataFrame(rows)
+def accuracy_section(frame: pd.DataFrame, n_total: int, cold_map, head_map, args) -> dict:
+    """Overall and per-slice CIs over the per-impression metric rows."""
 
     def ci_block(subset: pd.DataFrame, denominator: int) -> dict:
         block = {}
@@ -155,7 +193,14 @@ def accuracy_section(scored: pd.DataFrame, n_total: int, cold_map, head_map, arg
 
 def beyond_section(scored: pd.DataFrame, processed_dir, popularity, args) -> dict:
     """Diversity/novelty/coverage over the re-ranked top-K of sampled impressions."""
-    embeddings_lookup, _ = load_embeddings_lookup(processed_dir)
+    try:
+        embeddings_lookup, _ = load_embeddings_lookup(processed_dir)
+    except FileNotFoundError:
+        # Diversity is the only metric here that needs the semantic feature
+        # store, which exists only on machines that built the `semantic` arm.
+        # Novelty and coverage need click counts and article ids, so the run
+        # still produces them rather than failing outright.
+        embeddings_lookup = None
     probabilities, default_probability = beyond_accuracy.click_probabilities(popularity)
     catalogue_size = len(pd.read_parquet(processed_dir / "articles.parquet", columns=["article_id"]))
 
@@ -163,12 +208,15 @@ def beyond_section(scored: pd.DataFrame, processed_dir, popularity, args) -> dic
     for _, block in scored.groupby("impression_id", sort=False):
         top = block.nlargest(args.top_k, "model_score")["article_id"].tolist()
         recommended.append(top)
-        value = beyond_accuracy.intra_list_diversity(top, embeddings_lookup)
+        value = None if embeddings_lookup is None else beyond_accuracy.intra_list_diversity(top, embeddings_lookup)
         diversity.append(float("nan") if value is None else value)
         novelty.append(beyond_accuracy.novelty(top, probabilities, default_probability))
 
     diversity_ci = bootstrap.bootstrap_ci(diversity, args.resamples, seed=args.seed)
-    random_baseline = beyond_accuracy.random_pair_diversity(embeddings_lookup, seed=args.seed)
+    random_baseline = (
+        float("nan") if embeddings_lookup is None
+        else beyond_accuracy.random_pair_diversity(embeddings_lookup, seed=args.seed)
+    )
 
     return {
         "diversity": diversity_ci,
@@ -176,6 +224,7 @@ def beyond_section(scored: pd.DataFrame, processed_dir, popularity, args) -> dic
         "diversity_vs_random": (
             diversity_ci["mean"] / random_baseline if random_baseline else float("nan")
         ),
+        "_diversity_unavailable": embeddings_lookup is None,
         "_diversity_note": (
             "Raw diversity is not comparable across datasets: it is dominated by how "
             "anisotropic the embedding space is. A random EB-NeRD pair scores ~0.049 "
@@ -205,6 +254,8 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=10, help="re-ranked list length for beyond-accuracy")
     parser.add_argument("--beyond-sample", type=int, default=5000)
     parser.add_argument("--resamples", type=int, default=1000)
+    parser.add_argument("--chunk-impressions", type=int, default=reranker.EVAL_CHUNK_IMPRESSIONS,
+                        help="impressions per feature-matrix chunk; lower it if memory is tight")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
@@ -226,11 +277,11 @@ def main() -> None:
     cold_map, head_map = population_slices(processed_dir, args.split, head_set)
 
     # Accuracy: positive-bearing impressions only, which is exact for the
-    # full-population means (see module docstring).
-    accuracy_matrix = reranker.build_matrix(
-        processed_dir, args.dataset, args.split, args.method, article_index, positives_only=True
+    # full-population means (see module docstring), chunked so MIND's ~14.6M
+    # candidate rows are never resident at once.
+    accuracy_frame = accuracy_rows_chunked(
+        processed_dir, args, article_index, booster, features, cold_map, head_map
     )
-    accuracy_scored = score_matrix(accuracy_matrix, booster, features)
 
     # Beyond-accuracy: a sample of ALL impressions, positive-bearing or not.
     rng = np.random.default_rng(args.seed)
@@ -249,13 +300,14 @@ def main() -> None:
         "model": {"path": str(model_path.name), "num_trees": booster.num_trees()},
         "config": {
             "top_k": args.top_k,
+            "chunk_impressions": args.chunk_impressions,
             "beyond_sample": args.beyond_sample,
             "resamples": args.resamples,
             "seed": args.seed,
             "cold_start_threshold": slicing.COLD_START_THRESHOLD,
             "head_fraction": slicing.HEAD_FRACTION,
         },
-        "accuracy": accuracy_section(accuracy_scored, n_total, cold_map, head_map, args),
+        "accuracy": accuracy_section(accuracy_frame, n_total, cold_map, head_map, args),
         "beyond_accuracy": beyond_section(beyond_scored, processed_dir, popularity, args),
     }
 
