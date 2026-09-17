@@ -859,7 +859,7 @@ yet, which is the same failure the re-ranker's freshness proxy was fixed for.
 ```bash
 python run_nrms.py --dataset ebnerd --stage all                   # baseline, path unchanged
 python run_nrms.py --dataset ebnerd --stage all --freshness       # -> nrms/freshness/
-python run_nrms.py --dataset ebnerd --stage all --seed 43 --run-tag freshness_s43
+python run_nrms.py --dataset ebnerd --stage all --freshness --seed 43 --run-tag freshness_s43
 ```
 
 `--run-tag` defaults to `freshness` when `--freshness` is set and to the
@@ -1067,7 +1067,7 @@ variation, so extra seeds are not needed to support the claim. MIND's null is
 likewise not a seed question: the diagnostic above shows there is no signal to
 find *under the first-seen definition*, and repeating it would only re-measure
 zero. Seeds 43/44 stay available
-(`--seed 43 --run-tag freshness_s43`) if a reviewer asks.
+(`--freshness --seed 43 --run-tag freshness_s43`) if a reviewer asks.
 
 ---
 

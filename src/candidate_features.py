@@ -24,8 +24,9 @@ from src import config
 
 def position_bias(rank: int, log_base: str = config.POSITION_BIAS_LOG_BASE) -> float:
     """1 / log(rank + 2). `rank` is the candidate's 1-indexed position in the
-    upstream retriever's (A1) top-K ranking -- not a position in the original
-    impression's display order, which most retrieved candidates never had."""
+    stage-1 top-K ranking (whichever candidates.py method produced it) -- not a
+    position in the original impression's display order, which most retrieved
+    candidates never had."""
     denom = math.log2(rank + 2) if log_base == "2" else math.log(rank + 2)
     return 1.0 / denom
 

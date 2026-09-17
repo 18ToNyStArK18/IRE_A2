@@ -209,7 +209,7 @@ def main() -> None:
         tracker.finish()
 
 
-def _run_stages(args, dataset, processed_dir, artifact_dir, codec, token_matrix,
+def _run_stages(args, dataset, processed_dir, run_dir, codec, token_matrix,
                 model, device, checkpoint_path, tracker, freshness_lookup) -> None:
     if args.stage in ("train", "all"):
         train_impressions = adapter.load_impressions(
@@ -237,7 +237,7 @@ def _run_stages(args, dataset, processed_dir, artifact_dir, codec, token_matrix,
             train_samples,
             val_samples,
             token_matrix,
-            artifact_dir,
+            run_dir,
             epochs=args.epochs,
             batch_size=args.batch_size,
             learning_rate=args.learning_rate,
@@ -262,7 +262,7 @@ def _run_stages(args, dataset, processed_dir, artifact_dir, codec, token_matrix,
             impressions,
             token_matrix,
             codec,
-            artifact_dir,
+            run_dir,
             split=args.eval_split,
             batch_size=args.batch_size,
             device=device,

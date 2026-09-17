@@ -78,7 +78,7 @@ class InvertedIndex:
         every term's query-tf is 1, so this is numerically identical to the
         old set-based behavior; it only changes results for query
         construction methods that deliberately repeat text (e.g. recency
-        weighting in run_ablation_study.py)."""
+        weighting in run_ablation_study.py, A1 repo)."""
         scores = np.zeros(self.n_docs, dtype=np.float64)
         if self.n_docs == 0:
             return scores

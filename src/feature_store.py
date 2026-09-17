@@ -2,7 +2,8 @@
 
 Article features: one row per article_id -- title, abstract, body, category,
 subcategory, entities, published_time, plus an `embedding` placeholder column
-(filled in by Phase 3's embeddings_index.py; left as None here).
+that stays None: embeddings_index.py writes vectors to a separate
+feature_store/embeddings.parquet instead.
 
 User features: one row per user_id *per split* -- the user's click history
 and its length, snapshotted from their most recent impression within that

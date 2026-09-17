@@ -10,7 +10,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from src import config
 from src.ann_index import BruteForceANN
 from src.lexical_retrieval import K_MAX, K_VALUES, compute_recall_at_k, load_popularity_fallback
 

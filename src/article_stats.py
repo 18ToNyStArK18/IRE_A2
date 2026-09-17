@@ -92,6 +92,13 @@ def freshness_reference_times(processed_dir, dataset: str, splits=("train",)) ->
             if not pd.isna(published)
         }
 
+    return first_seen_times(processed_dir, splits)
+
+
+def first_seen_times(processed_dir, splits) -> dict[str, pd.Timestamp]:
+    """Earliest time each article was shown as a candidate in `splits`, for any
+    dataset. MIND's freshness proxy; also applied to EB-NeRD by
+    scripts/age_signal.py to price that proxy where real publish times exist."""
     first_seen: dict[str, pd.Timestamp] = {}
     for split in splits:
         frame = pd.read_parquet(

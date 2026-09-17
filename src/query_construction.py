@@ -2,12 +2,12 @@
 
 Three independent, experimentable axes:
   - `fields`: which article fields to pull from each clicked article
-              (e.g. ["title"] vs ["title", "abstract"]) -- per plan.md
-  - `window`: how many of the most-recent clicks to use (e.g. 3 vs 10) -- per plan.md
+              (e.g. ["title"] vs ["title", "abstract"]) -- per plan.md (A1 repo)
+  - `window`: how many of the most-recent clicks to use (e.g. 3 vs 10) -- per plan.md (A1 repo)
   - `method`: how to turn the selected articles' text into a query string
               ("direct" concatenation, "recency_weighted" repetition, or
               "tfidf_keywords" distillation) -- the extended ablation in
-              run_ablation_study.py
+              run_ablation_study.py (A1 repo)
 
 History lists are stored oldest-first (both MIND and EB-NeRD document their
 history as chronologically ordered), so "most recent" = the tail of the list.

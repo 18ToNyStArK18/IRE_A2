@@ -55,10 +55,7 @@ TEXT_COLUMNS = {
     "ebnerd": ("title", "abstract", "body"),
 }
 
-PROCESSED_DIRS = {
-    "mind": base_config.MIND_PROCESSED_DIR,
-    "ebnerd": base_config.EBNERD_PROCESSED_DIR,
-}
+PROCESSED_DIRS = base_config.PROCESSED_DIRS
 
 
 def artifact_dir(dataset: str):

@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -60,27 +59,6 @@ from sklearn.metrics import roc_auc_score
 NS_PER_HOUR = 3.6e12
 
 
-def first_seen_reference_times(processed_dir, splits) -> dict:
-    """Earliest time each article appears as a candidate, for ANY dataset.
-
-    `article_stats.freshness_reference_times` short-circuits to `published_time`
-    for EB-NeRD, which is the right default but makes the proxy uninspectable on
-    the one dataset that can validate it. This is that function's MIND branch,
-    applied regardless of dataset.
-    """
-    first_seen: dict = {}
-    for split in splits:
-        frame = pd.read_parquet(
-            processed_dir / f"behaviors_{split}.parquet", columns=["time", "candidates"]
-        )
-        for t, candidates in zip(frame["time"], frame["candidates"]):
-            for article_id in candidates:
-                previous = first_seen.get(article_id)
-                if previous is None or t < previous:
-                    first_seen[article_id] = t
-    return first_seen
-
-
 def log_window_start_ns(processed_dir, splits) -> int:
     """First timestamp anywhere in the behaviour logs.
 
@@ -93,15 +71,6 @@ def log_window_start_ns(processed_dir, splits) -> int:
         for split in splits
     ]
     return int(pd.Timestamp(min(starts)).value)
-
-
-def lookup_from_references(references: dict, codec) -> FreshnessLookup:
-    reference_ns = np.full(codec.n_articles + 1, np.nan, dtype=np.float64)
-    for article_id, timestamp in references.items():
-        code = codec.id_to_code.get(str(article_id))
-        if code is not None:
-            reference_ns[code] = pd.Timestamp(timestamp).value
-    return FreshnessLookup(reference_ns)
 
 
 def load_head(artifact_dir, arm: str):
@@ -143,9 +112,11 @@ def main() -> None:
     if args.reference == "default":
         lookup = FreshnessLookup.build(processed_dir, args.dataset, codec, splits)
     else:
-        lookup = lookup_from_references(first_seen_reference_times(processed_dir, splits), codec)
+        # freshness_reference_times short-circuits EB-NeRD to published_time, so
+        # the proxy is forced here to make it testable where the truth is known.
+        lookup = FreshnessLookup.from_references(article_stats.first_seen_times(processed_dir, splits), codec)
     truth = (
-        lookup_from_references(article_stats.freshness_reference_times(processed_dir, args.dataset, splits), codec)
+        FreshnessLookup.from_references(article_stats.freshness_reference_times(processed_dir, args.dataset, splits), codec)
         if args.reference == "first-seen" and args.dataset == "ebnerd"
         else None
     )

@@ -3,7 +3,7 @@ ebnerd-benchmark's `MetricEvaluator` uses (AUC, MRR, nDCG@k), and the metric
 set A2 asks for in Q2 and Q5.
 
 Deliberately at src/metrics.py rather than inside src/nrms/: the same harness
-has to score the Q1 re-ranker and the full two-stage pipeline later, so it must
+has to score the Q2 re-ranker and the full two-stage pipeline later, so it must
 not be owned by one model.
 
 "Per impression" is the important part. A single global AUC over pooled
@@ -69,6 +69,21 @@ def ndcg_score(labels, scores, k: int) -> float:
     if ideal == 0:
         return 0.0
     return dcg_score(labels, scores, k) / ideal
+
+
+def per_impression_metrics(labels, scores) -> dict[str, float]:
+    """One impression's AUC, MRR, nDCG@5 and nDCG@10, for callers that need the
+    per-impression values themselves (bootstrap resampling) rather than means.
+    AUC is NaN where undefined (all-0 or all-1 labels), so a NaN-dropping mean
+    matches evaluate_impressions' AUC-only skip."""
+    labels = np.asarray(labels)
+    auc = float(roc_auc_score(labels, scores)) if 0 < labels.sum() < len(labels) else float("nan")
+    return {
+        "auc": auc,
+        "mrr": mrr_score(labels, scores),
+        "ndcg@5": ndcg_score(labels, scores, 5),
+        "ndcg@10": ndcg_score(labels, scores, 10),
+    }
 
 
 def evaluate_impressions(

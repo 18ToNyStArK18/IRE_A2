@@ -41,26 +41,12 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sklearn.metrics import roc_auc_score  # noqa: E402
-
 from src import beyond_accuracy, bootstrap, reranker, slicing  # noqa: E402
 from src.candidates import PROCESSED_DIRS  # noqa: E402
-from src.metrics import mrr_score, ndcg_score  # noqa: E402
+from src.metrics import per_impression_metrics  # noqa: E402
 from src.semantic_retrieval import load_embeddings_lookup  # noqa: E402
 
 ACCURACY_METRICS = ("auc", "mrr", "ndcg@5", "ndcg@10")
-
-
-def per_impression_accuracy(labels: np.ndarray, scores: np.ndarray) -> dict[str, float]:
-    """AUC is NaN when undefined; bootstrap_ci drops NaNs, so it leaves the AUC
-    mean without disturbing MRR or nDCG for the same impression."""
-    auc = float(roc_auc_score(labels, scores)) if 0 < labels.sum() < len(labels) else float("nan")
-    return {
-        "auc": auc,
-        "mrr": mrr_score(labels, scores),
-        "ndcg@5": ndcg_score(labels, scores, 5),
-        "ndcg@10": ndcg_score(labels, scores, 10),
-    }
 
 
 def load_popularity(processed_dir) -> dict[str, int]:
@@ -110,7 +96,9 @@ def accuracy_rows_chunked(processed_dir, args, article_index, booster, features,
             continue
         score_matrix(matrix, booster, features)
         for impression_id, block in matrix.groupby("impression_id", sort=False):
-            metrics = per_impression_accuracy(
+            # AUC is NaN when undefined; bootstrap_ci drops NaNs, so it leaves
+            # the AUC mean without disturbing MRR or nDCG for the same impression.
+            metrics = per_impression_metrics(
                 block["label"].to_numpy(dtype=np.float64), block["model_score"].to_numpy()
             )
             metrics["_cold_warm"] = cold_map.get(impression_id)

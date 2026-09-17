@@ -5,8 +5,9 @@ pair weighted by |ΔnDCG| from swapping it, boosted over regression trees. The
 family, stated precisely: pairwise gradient weighted by a listwise metric. See
 DesignChoices.md §1 for why this over pointwise or a pure listwise objective.
 
-Two things here are driven by the recall ceiling (DesignChoices.md §0) and are
-easy to get wrong:
+Three things here are easy to get wrong. Points 1-2 were written for the
+catalogue-candidate recall ceiling (DesignChoices.md §0), so their numbers
+describe that regime; point 3 is the current fresh-pool pipeline (§2E).
 
 1. **Training filters to impressions that contain a positive; evaluation does
    not.** A group whose labels are all 0 generates no pairs, so LambdaMART
@@ -51,7 +52,8 @@ DEFAULT_PARAMS = {
     "ndcg_eval_at": [5, 10],
     # LightGBM defaults this to 30, which would be actively harmful here: it
     # truncates the pairs considered to the model's current top-30, and our
-    # positives start at median rank 80 of 200 (DesignChoices.md §0.1). Most
+    # positives started at median rank 80 of 200 under catalogue candidates
+    # (DesignChoices.md §0.1). Most
     # positives would sit outside the truncation window and generate no
     # gradient at all. Groups are only 200 wide, so scoring every pair is
     # affordable.

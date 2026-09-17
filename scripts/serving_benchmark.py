@@ -49,7 +49,7 @@ from src.candidate_features import build_candidate_features  # noqa: E402
 from src.feature_pipeline import load_articles_lookup  # noqa: E402
 from src.impression_features import build_impression_features  # noqa: E402
 
-PROCESSED_DIRS = {"mind": config.MIND_PROCESSED_DIR, "ebnerd": config.EBNERD_PROCESSED_DIR}
+PROCESSED_DIRS = config.PROCESSED_DIRS
 PERCENTILES = (50, 95, 99)
 _PAGE = os.sysconf("SC_PAGE_SIZE")
 

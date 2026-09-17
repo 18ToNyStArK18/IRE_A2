@@ -2,9 +2,9 @@
 not (MIND), and write both into a unified per-dataset feature-store table.
 
 MIND ships no article embeddings, so we compute them ourselves with
-`bert-base-uncased` (monolingual, faster + more accurate than a multilingual
-model for English-only text) over title+abstract, mean-pooled across tokens
-with the attention mask and L2-normalized.
+config.MIND_SEMANTIC_MODEL (MiniLM, A1's bootstrap-significant winner over
+bert-base-uncased) over title+abstract, mean-pooled across tokens with the
+attention mask and L2-normalized.
 
 EB-NeRD's RecSys24 artifacts already include per-article multilingual BERT
 embeddings (`google-bert/bert-base-multilingual-cased`, 768-dim) -- we load

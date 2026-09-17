@@ -18,7 +18,7 @@ test set.
 
 It says nothing about *training* variance. A different seed changes the weights,
 not the test set, and this procedure cannot see that -- so a gain of the same
-order as seed noise needs repeated runs (`--seed 43 --run-tag freshness_s43`),
+order as seed noise needs repeated runs (`--freshness --seed 43 --run-tag freshness_s43`),
 not a tighter interval here. See DesignChoices.md §2F "Seed count".
 
 Metrics come from src/metrics.py so this script cannot drift from the numbers in
@@ -40,10 +40,8 @@ import pandas as pd
 # repo root, so `src` would not import.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.metrics import mrr_score, ndcg_score
+from src.metrics import per_impression_metrics
 from src.nrms import config as nrms_config
-
-from sklearn.metrics import roc_auc_score
 
 METRICS = ("auc", "mrr", "ndcg@5", "ndcg@10")
 
@@ -55,12 +53,8 @@ def per_impression(labels: np.ndarray, scores: np.ndarray) -> tuple[float, ...]:
     drops those from the AUC mean only, and pairing forces the same treatment on
     both arms, so the difference stays defined on exactly the same rows.
     """
-    auc = (
-        float(roc_auc_score(labels, scores))
-        if 0 < labels.sum() < len(labels)
-        else float("nan")
-    )
-    return auc, mrr_score(labels, scores), ndcg_score(labels, scores, 5), ndcg_score(labels, scores, 10)
+    values = per_impression_metrics(labels, scores)
+    return tuple(values[name] for name in METRICS)
 
 
 def load_pair(dataset: str, arm: str, split: str) -> pd.DataFrame:

@@ -3,18 +3,19 @@ with the impression-level (impression_features.py) and candidate-level
 (candidate_features.py) feature builders, and derives training labels from
 ground-truth clicks.
 
-Candidate contract (produced by src/candidates.py from A1's retriever -- BM25
-or embedding-based; this module doesn't care which):
+Candidate contract (produced by src/candidates.py -- any stage-1 method; this
+module doesn't care which):
     impression_id: str
     article_id: str
     rank: int   (1-indexed position within that impression's retrieved list)
+    retrieval_score: float  (stage 1's raw score; scale is method-specific)
 
 Label: 1 if article_id is in the impression's true clicked set (from
 behaviors_{split}'s own candidates/labels where label == 1), else 0 --
 regardless of whether the retrieved candidate was ever shown in the
-platform's own impression. A1's retrieval pools the WHOLE catalog, which is
-broader than what the platform actually displayed, so most retrieved
-candidates legitimately get label 0.
+platform's own impression. The bm25/semantic arms pool the WHOLE catalog, and
+even the fresh pool is broader than one impression's in-view list, so most
+retrieved candidates legitimately get label 0.
 """
 
 from __future__ import annotations
@@ -109,12 +110,3 @@ def build_feature_matrix(
     if rows or not frames:
         frames.append(pd.DataFrame(rows))
     return frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True)
-
-
-def load_candidates(processed_dir, method: str, split: str, k: int | None = None) -> pd.DataFrame:
-    """Candidates now come from A1's retriever -- see src/candidates.py, which
-    generates and persists them. Re-exported here so callers have one import
-    for the whole feature-building path."""
-    from src.candidates import load_candidates as _load
-
-    return _load(processed_dir, method, split, k)

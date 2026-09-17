@@ -61,7 +61,7 @@ from src.lexical_retrieval import (
 from src.query_construction import build_query
 from src.semantic_retrieval import build_user_representation, load_embeddings_lookup
 
-PROCESSED_DIRS = {"mind": config.MIND_PROCESSED_DIR, "ebnerd": config.EBNERD_PROCESSED_DIR}
+PROCESSED_DIRS = config.PROCESSED_DIRS
 METHODS = ("bm25", "semantic", "bm25_fresh", "popular")
 _BM25_FRESH_TIE_SEED = 0
 

@@ -8,7 +8,7 @@ ready-to-use feature store.
     python build_pipeline.py --skip-download        # reuse already-downloaded raw files
     python build_pipeline.py --hf-token <token>      # or set HF_TOKEN env var (needed for MIND)
 
-Stages run in order: download -> parse -> split -> feature_store -> popularity.
+Stages run in order: download -> parse -> split -> feature_store -> popularity -> embeddings.
 """
 
 from __future__ import annotations

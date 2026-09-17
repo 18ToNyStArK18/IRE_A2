@@ -20,4 +20,7 @@ Module map:
     dataset     torch Datasets + collates for training and evaluation
     train       training loop
     evaluate    scoring + metrics (metrics themselves live in src/metrics.py)
+    freshness   article-age lookup for the Q3 freshness arm
+    serve       cached article-vector scorer for Codabench-scale submissions
+    tracking    run logging and failure-tolerant W&B wrapper
 """

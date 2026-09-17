@@ -51,6 +51,12 @@ class FreshnessLookup:
         learn a signal it then cannot apply. ages()'s strict as-of gate keeps a
         val/test sighting from dating any impression that precedes it."""
         references = article_stats.freshness_reference_times(processed_dir, dataset, splits)
+        return cls.from_references(references, codec)
+
+    @classmethod
+    def from_references(cls, references: dict, codec: ArticleCodec) -> "FreshnessLookup":
+        """Article id -> timestamp, laid out by article code. Unknown ids and
+        PAD_CODE stay NaN, i.e. never dated."""
         reference_ns = np.full(codec.n_articles + 1, np.nan, dtype=np.float64)
         for article_id, timestamp in references.items():
             code = codec.id_to_code.get(str(article_id))

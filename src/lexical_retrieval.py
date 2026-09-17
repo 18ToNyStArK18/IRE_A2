@@ -5,14 +5,13 @@ Corpus indexing is fixed to title+abstract per the assignment spec (Q2:
 a plain constructor argument (see inverted_index.concat_fields) so it can be
 changed in one place. Query construction (which fields of the *clicked*
 articles to use, and how much history) is the experimentable axis -- see
-query_construction.py and run_bm25_experiments.py.
+query_construction.py and run_bm25_experiments.py (A1 repo).
 """
 
 from __future__ import annotations
 
 import pandas as pd
 
-from src import config
 from src.inverted_index import InvertedIndex, concat_fields
 from src.query_construction import build_query_text
 
