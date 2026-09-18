@@ -10,7 +10,8 @@ impression, because `NewsEncoder` has no context. That claim is the only thing
 standing between a valid submission and 13.5M rows of quietly wrong ranking, so
 it is checked numerically rather than argued: re-score our own labelled test
 split through the fast path and require the metrics in
-`data/processed/<ds>/nrms/freshness/metrics_test.json` back.
+`data/processed/<ds>/nrms/<arm>/metrics_test.json` back (`--arm baseline` checks
+the unflagged run at the artifact root).
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dataset", choices=["mind", "ebnerd"], required=True)
     parser.add_argument("--split", default="test")
-    parser.add_argument("--arm", default="freshness")
+    parser.add_argument("--arm", default="freshness", help="run-tag subdirectory, or 'baseline' for the root run")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--limit", type=int, default=None, help="score only the first N impressions")
     args = parser.parse_args()
@@ -51,8 +52,9 @@ def main() -> None:
     if args.limit:
         impressions = impressions.head(args.limit)
 
-    model = serve.load_trained_model(artifact_dir / args.arm / "nrms.pt", device, freshness=True)
-    lookup = FreshnessLookup.build(processed_dir, args.dataset, codec)
+    # The baseline writes to the artifact root; every other arm to run_dir/<tag>.
+    run_dir = artifact_dir if args.arm == "baseline" else artifact_dir / args.arm
+    model = serve.load_trained_model(run_dir / "nrms.pt", device)  # arm read off the checkpoint
 
     # The processed token matrix already reserves code 0 for padding.
     article_vectors = serve.encode_catalogue(model, token_matrix, device, prepend_pad=False)
@@ -62,8 +64,11 @@ def main() -> None:
     widths = np.asarray([len(c) for c in impressions["candidates"]], dtype=np.int64)
     offsets = np.concatenate([[0], np.cumsum(widths)])
     cand_rows = np.concatenate([np.asarray(c, dtype=np.int64) for c in impressions["candidates"]])
-    times = impressions["time"].to_numpy(dtype="datetime64[ns]").astype(np.int64)
-    log_age, known = lookup.ages(cand_rows, np.repeat(times, widths))
+    log_age = known = None
+    if model.freshness_head is not None:
+        lookup = FreshnessLookup.build(processed_dir, args.dataset, codec)
+        times = impressions["time"].to_numpy(dtype="datetime64[ns]").astype(np.int64)
+        log_age, known = lookup.ages(cand_rows, np.repeat(times, widths))
 
     scores = serve.score_chunk(
         model, article_vectors, history_rows, cand_rows, offsets,
@@ -73,7 +78,7 @@ def main() -> None:
     labels = [np.asarray(l, dtype=np.float32) for l in impressions["labels"]]
     fast = evaluate_impressions(labels, per_impression, ndcg_ks=(5, 10))
 
-    committed = json.loads((artifact_dir / args.arm / f"metrics_{args.split}.json").read_text())
+    committed = json.loads((run_dir / f"metrics_{args.split}.json").read_text())
     print(f"{'metric':8s} {'committed':>10s} {'fast path':>10s} {'delta':>10s}")
     worst = 0.0
     for name in ("auc", "mrr", "ndcg@5", "ndcg@10"):

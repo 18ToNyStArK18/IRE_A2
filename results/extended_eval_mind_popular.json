@@ -9,7 +9,7 @@
   "config": {
     "top_k": 10,
     "chunk_impressions": 5000,
-    "beyond_sample": 2000,
+    "beyond_sample": 5000,
     "resamples": 1000,
     "seed": 42,
     "cold_start_threshold": 5,
@@ -165,32 +165,32 @@
   },
   "beyond_accuracy": {
     "diversity": {
-      "mean": 0.925711857944727,
-      "ci_lower": 0.9246273602850735,
-      "ci_upper": 0.9267750025928021,
-      "n": 2000
+      "mean": 0.9256121429443359,
+      "ci_lower": 0.9249749048230052,
+      "ci_upper": 0.9263073724538088,
+      "n": 5000
     },
     "diversity_random_baseline": 0.9402354917187546,
-    "diversity_vs_random": 0.9845531955537241,
+    "diversity_vs_random": 0.9844471423348558,
     "_diversity_unavailable": false,
     "_diversity_note": "Raw diversity is not comparable across datasets: it is dominated by how anisotropic the embedding space is. A random EB-NeRD pair scores ~0.049 (provided multilingual BERT, vectors in a narrow cone) and a random MIND pair ~0.945 (MiniLM, contrastively trained). Read diversity_vs_random, where 1.0 means 'as diverse as picking at random' and below 1.0 means the recommender concentrates.",
     "novelty": {
-      "mean": 17.289699737965275,
-      "ci_lower": 17.26911378493878,
-      "ci_upper": 17.310953276364486,
-      "n": 2000
+      "mean": 17.297330006510194,
+      "ci_lower": 17.2841561222428,
+      "ci_upper": 17.310658096642015,
+      "n": 5000
     },
     "coverage": {
-      "value": 0.0031729973328428218,
-      "ci_lower": 0.0030685490051810295,
-      "ci_upper": 0.003267819369079371,
-      "n": 2000,
-      "resample_mean_uncorrected": 0.002955547380361139,
-      "bias_shift_applied": 0.0002174499524816827
+      "value": 0.003694165976884638,
+      "ci_lower": 0.003588154143290721,
+      "ci_upper": 0.0038031362089579698,
+      "n": 5000,
+      "resample_mean_uncorrected": 0.003462567828566173,
+      "bias_shift_applied": 0.0002315981483184651
     },
     "top_k": 10,
     "catalogue_size": 65238,
-    "n_impressions_sampled": 2000,
+    "n_impressions_sampled": 5000,
     "_note": "Computed on a sample of impressions, so coverage is conditional on n_impressions_sampled -- scoring more impressions can only cover more catalogue. Diversity and novelty are per-impression means and are not."
   }
 }

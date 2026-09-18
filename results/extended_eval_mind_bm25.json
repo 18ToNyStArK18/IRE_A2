@@ -4,11 +4,12 @@
   "split": "test",
   "model": {
     "path": "lambdamart_bm25.txt",
-    "num_trees": 80
+    "num_trees": 65
   },
   "config": {
     "top_k": 10,
-    "beyond_sample": 2000,
+    "chunk_impressions": 5000,
+    "beyond_sample": 5000,
     "resamples": 1000,
     "seed": 42,
     "cold_start_threshold": 5,
@@ -17,27 +18,27 @@
   "accuracy": {
     "overall": {
       "auc": {
-        "mean": 0.9698173853581238,
-        "ci_lower": 0.9659699103944074,
-        "ci_upper": 0.9733798222062888,
-        "n": 2120
+        "mean": 0.9712466277813663,
+        "ci_lower": 0.9671678177925296,
+        "ci_upper": 0.9750675375805046,
+        "n": 2123
       },
       "mrr": {
-        "mean": 0.01885651337220717,
-        "ci_lower": 0.017914682067816688,
-        "ci_upper": 0.019824649082932924,
+        "mean": 0.018329688616282185,
+        "ci_lower": 0.017405790758059224,
+        "ci_upper": 0.01920891007841508,
         "n": 73152
       },
       "ndcg@5": {
-        "mean": 0.019945418991787017,
-        "ci_lower": 0.018977450951398165,
-        "ci_upper": 0.020936449850730808,
+        "mean": 0.019594638894345113,
+        "ci_lower": 0.018654190687528344,
+        "ci_upper": 0.020504089543758167,
         "n": 73152
       },
       "ndcg@10": {
-        "mean": 0.020618352711723846,
-        "ci_lower": 0.019641869622279394,
-        "ci_upper": 0.02161471444152858,
+        "mean": 0.02026605932757318,
+        "ci_lower": 0.01930701518149766,
+        "ci_upper": 0.02120271626813543,
         "n": 73152
       }
     },
@@ -45,27 +46,27 @@
       "cold_start_vs_warm": {
         "cold_start": {
           "auc": {
-            "mean": 0.9484697083466794,
-            "ci_lower": 0.929147042739385,
-            "ci_upper": 0.9660777915942479,
+            "mean": 0.9489791017959881,
+            "ci_lower": 0.9282817507513184,
+            "ci_upper": 0.9677933202126096,
             "n": 232
           },
           "mrr": {
-            "mean": 0.011184413642444381,
-            "ci_lower": 0.00949328437575501,
-            "ci_upper": 0.01298530386556373,
+            "mean": 0.010934540318642036,
+            "ci_lower": 0.009247634261863718,
+            "ci_upper": 0.012656155594511205,
             "n": 12982
           },
           "ndcg@5": {
-            "mean": 0.011690464114392122,
-            "ci_lower": 0.009863811017401561,
-            "ci_upper": 0.013539635446939544,
+            "mean": 0.011608728558411328,
+            "ci_lower": 0.009870438336804408,
+            "ci_upper": 0.013388960084076244,
             "n": 12982
           },
           "ndcg@10": {
-            "mean": 0.012151551374295159,
-            "ci_lower": 0.010321572337026647,
-            "ci_upper": 0.014030455460054455,
+            "mean": 0.012104449357453142,
+            "ci_lower": 0.010346580662808183,
+            "ci_upper": 0.013887968345858205,
             "n": 12982
           },
           "n_scored_impressions": 232,
@@ -73,122 +74,123 @@
         },
         "warm": {
           "auc": {
-            "mean": 0.9724406168552929,
-            "ci_lower": 0.9684662775951255,
-            "ci_upper": 0.9762139491649374,
-            "n": 1888
+            "mean": 0.9739785505886682,
+            "ci_lower": 0.9703563867022984,
+            "ci_upper": 0.977320174332019,
+            "n": 1891
           },
           "mrr": {
-            "mean": 0.02051181000992996,
-            "ci_lower": 0.019526395461569566,
-            "ci_upper": 0.02153988515268457,
+            "mean": 0.019925231498116397,
+            "ci_lower": 0.018917477069957233,
+            "ci_upper": 0.020957075349947677,
             "n": 60170
           },
           "ndcg@5": {
-            "mean": 0.021726469751606536,
-            "ci_lower": 0.02066867951352486,
-            "ci_upper": 0.02280422438501565,
+            "mean": 0.02131764185231574,
+            "ci_lower": 0.020224740685659166,
+            "ci_upper": 0.02242366070411012,
             "n": 60170
           },
           "ndcg@10": {
-            "mean": 0.02244511048075325,
-            "ci_lower": 0.021390024088936654,
-            "ci_upper": 0.023490404047057455,
+            "mean": 0.022026970423336824,
+            "ci_lower": 0.02097123006072653,
+            "ci_upper": 0.023125849155612627,
             "n": 60170
           },
-          "n_scored_impressions": 1888,
+          "n_scored_impressions": 1891,
           "n_population_impressions": 60170
         }
       },
       "head_vs_tail": {
         "head": {
           "auc": {
-            "mean": 0.9340161831518424,
-            "ci_lower": 0.9229428782196494,
-            "ci_upper": 0.9454265777934712,
-            "n": 565
+            "mean": 0.9384295676334126,
+            "ci_lower": 0.9275832402652389,
+            "ci_upper": 0.9481948818863082,
+            "n": 560
           },
           "mrr": {
-            "mean": 0.02656859885639348,
-            "ci_lower": 0.02350265763191518,
-            "ci_upper": 0.029366370629119225,
-            "n": 9170
+            "mean": 0.024359298300442086,
+            "ci_lower": 0.02155647216045503,
+            "ci_upper": 0.027051814111377602,
+            "n": 9150
           },
           "ndcg@5": {
-            "mean": 0.02794721773974151,
-            "ci_lower": 0.024747806810005425,
-            "ci_upper": 0.030847794882392452,
-            "n": 9170
+            "mean": 0.02637847923104949,
+            "ci_lower": 0.02338417297783092,
+            "ci_upper": 0.029225006992051765,
+            "n": 9150
           },
           "ndcg@10": {
-            "mean": 0.030804311732915604,
-            "ci_lower": 0.027539542360803648,
-            "ci_upper": 0.033851874002082435,
-            "n": 9170
+            "mean": 0.029405250621079477,
+            "ci_lower": 0.02629919077501078,
+            "ci_upper": 0.032300760066314015,
+            "n": 9150
           },
-          "n_scored_impressions": 565,
-          "n_population_impressions": 9170
+          "n_scored_impressions": 560,
+          "n_population_impressions": 9150
         },
         "tail": {
           "auc": {
-            "mean": 0.9828255392144254,
-            "ci_lower": 0.9792286091243005,
-            "ci_upper": 0.9860490889189601,
-            "n": 1555
+            "mean": 0.9830044996194047,
+            "ci_lower": 0.9795154374332266,
+            "ci_upper": 0.986264392494191,
+            "n": 1563
           },
           "mrr": {
-            "mean": 0.01775120525601842,
-            "ci_lower": 0.016759249402449012,
-            "ci_upper": 0.018705467881506486,
-            "n": 63982
+            "mean": 0.01746766979483812,
+            "ci_lower": 0.016566152448689135,
+            "ci_upper": 0.018408177684268456,
+            "n": 64002
           },
           "ndcg@5": {
-            "mean": 0.018798588718917417,
-            "ci_lower": 0.017780626724897445,
-            "ci_upper": 0.01978147438772444,
-            "n": 63982
+            "mean": 0.018624792028921457,
+            "ci_lower": 0.017665764564264188,
+            "ci_upper": 0.019607795266635298,
+            "n": 64002
           },
           "ndcg@10": {
-            "mean": 0.019158485182976255,
-            "ci_lower": 0.018139889336352865,
-            "ci_upper": 0.020144571054529554,
-            "n": 63982
+            "mean": 0.018959481402889847,
+            "ci_lower": 0.01797685625154533,
+            "ci_upper": 0.019930641588231063,
+            "n": 64002
           },
-          "n_scored_impressions": 1555,
-          "n_population_impressions": 63982
+          "n_scored_impressions": 1563,
+          "n_population_impressions": 64002
         }
       }
     },
     "n_impressions_total": 73152,
-    "n_impressions_scored": 2120
+    "n_impressions_scored": 2123
   },
   "beyond_accuracy": {
     "diversity": {
-      "mean": 0.8566223928630352,
-      "ci_lower": 0.8529858564734458,
-      "ci_upper": 0.8606726860031485,
-      "n": 2000
+      "mean": 0.8604890467643738,
+      "ci_lower": 0.8582320828145742,
+      "ci_upper": 0.8629201348349452,
+      "n": 5000
     },
-    "diversity_random_baseline": 0.9402354687927148,
-    "diversity_vs_random": 0.9110721955245521,
+    "diversity_random_baseline": 0.9402354917187546,
+    "diversity_vs_random": 0.9151846046477101,
+    "_diversity_unavailable": false,
     "_diversity_note": "Raw diversity is not comparable across datasets: it is dominated by how anisotropic the embedding space is. A random EB-NeRD pair scores ~0.049 (provided multilingual BERT, vectors in a narrow cone) and a random MIND pair ~0.945 (MiniLM, contrastively trained). Read diversity_vs_random, where 1.0 means 'as diverse as picking at random' and below 1.0 means the recommender concentrates.",
     "novelty": {
-      "mean": 13.570470907786762,
-      "ci_lower": 13.474985912739541,
-      "ci_upper": 13.652599901465374,
-      "n": 2000
+      "mean": 13.669591917197394,
+      "ci_lower": 13.617586835327259,
+      "ci_upper": 13.724606867415767,
+      "n": 5000
     },
     "coverage": {
-      "value": 0.0638891443637144,
-      "ci_lower": 0.06282930194058678,
-      "ci_upper": 0.06495996198534595,
-      "n": 2000,
-      "resample_mean_uncorrected": 0.052946779484349615,
-      "bias_shift_applied": 0.010942364879364785
+      "value": 0.08594684079830774,
+      "ci_lower": 0.08496754958766363,
+      "ci_upper": 0.08686866550170146,
+      "n": 5000,
+      "resample_mean_uncorrected": 0.07516879732671143,
+      "bias_shift_applied": 0.010778043471596305
     },
     "top_k": 10,
     "catalogue_size": 65238,
-    "n_impressions_sampled": 2000,
+    "n_impressions_sampled": 5000,
     "_note": "Computed on a sample of impressions, so coverage is conditional on n_impressions_sampled -- scoring more impressions can only cover more catalogue. Diversity and novelty are per-impression means and are not."
   }
 }

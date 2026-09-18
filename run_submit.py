@@ -118,7 +118,11 @@ def freshness_references(dataset: str, root: Path, cat, cache_dir: Path, rebuild
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dataset", choices=["mind", "ebnerd"], required=True)
-    parser.add_argument("--arm", default="freshness", help="which trained NRMS run to score with")
+    parser.add_argument(
+        "--arm", default="freshness",
+        help="which trained NRMS run to score with: a run-tag subdirectory of the "
+             "artifact dir, or 'baseline' for the unflagged run at its root",
+    )
     parser.add_argument("--limit", type=int, default=None, help="stop after N impressions (smoke test)")
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument("--rebuild-cache", action="store_true")
@@ -151,17 +155,24 @@ def main() -> None:
     # Text is only needed for tokenisation; 125k EB-NeRD bodies are not small.
     cat.text = []
 
-    checkpoint = nrms_config.artifact_dir(dataset) / args.arm / "nrms.pt"
+    artifact_dir = nrms_config.artifact_dir(dataset)
+    # The baseline writes to the artifact root; every other arm to run_dir/<tag>.
+    checkpoint = artifact_dir / "nrms.pt" if args.arm == "baseline" else artifact_dir / args.arm / "nrms.pt"
     if not checkpoint.exists():
         raise SystemExit(f"no checkpoint at {checkpoint} -- train the {args.arm} arm first")
-    model = serve.load_trained_model(checkpoint, device, freshness=True)
+    # freshness=None: the checkpoint itself says which arm this is.
+    model = serve.load_trained_model(checkpoint, device)
     article_vectors = serve.encode_catalogue(model, token_matrix, device)
     log.info("  encoded %s articles -> %s", f"{len(cat):,}", tuple(article_vectors.shape))
 
-    lookup = FreshnessLookup(freshness_references(dataset, root, cat, cache_dir, args.rebuild_cache))
-    dated = int(np.isfinite(lookup.reference_ns).sum())
-    log.info("  freshness: reference known for %s/%s articles (%.1f%%)",
-             f"{dated:,}", f"{len(cat):,}", 100 * dated / max(len(cat), 1))
+    # The baseline has no age channel, so it skips the reference pass entirely --
+    # on MIND that is a full extra streaming pass over the test log.
+    lookup = None
+    if model.freshness_head is not None:
+        lookup = FreshnessLookup(freshness_references(dataset, root, cat, cache_dir, args.rebuild_cache))
+        dated = int(np.isfinite(lookup.reference_ns).sum())
+        log.info("  freshness: reference known for %s/%s articles (%.1f%%)",
+                 f"{dated:,}", f"{len(cat):,}", 100 * dated / max(len(cat), 1))
 
     total = (
         submission.count_mind_impressions(root) if dataset == "mind"
@@ -186,10 +197,12 @@ def main() -> None:
 
     target = min(args.limit, total) if args.limit else total
     for chunk in chunks:
-        widths = np.diff(chunk.offsets)
-        log_age, known = lookup.ages(
-            chunk.cand_rows.astype(np.int64) + 1, np.repeat(chunk.impression_times, widths)
-        )
+        log_age = known = None
+        if lookup is not None:
+            widths = np.diff(chunk.offsets)
+            log_age, known = lookup.ages(
+                chunk.cand_rows.astype(np.int64) + 1, np.repeat(chunk.impression_times, widths)
+            )
         scores = serve.score_chunk(
             model, article_vectors, chunk.history_rows, chunk.cand_rows, chunk.offsets,
             log_age=log_age, known=known, batch_pairs=args.batch_pairs,

@@ -124,15 +124,21 @@ def score_chunk(
     return scores
 
 
-def load_trained_model(checkpoint_path, device, freshness: bool = True):
+def load_trained_model(checkpoint_path, device, freshness: bool | None = None):
     """Rebuild NRMS from a checkpoint without touching the HuggingFace weights.
 
     The embedding matrix is restored from the checkpoint itself, so submission
     runs do not re-download or re-load a 1.1 GB transformer only to overwrite it.
+
+    `freshness=None` reads the arm off the checkpoint: only the freshness arm
+    carries `freshness_head.*` weights, and building the head for a baseline
+    checkpoint (or omitting it for a freshness one) would fail load_state_dict.
     """
     from src.nrms.model import NRMS
 
     state = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    if freshness is None:
+        freshness = any(k.startswith("freshness_head") for k in state)
     vocab, dim = state["news_encoder.embedding.weight"].shape
     model = NRMS(
         np.zeros((vocab, dim), dtype=np.float32),

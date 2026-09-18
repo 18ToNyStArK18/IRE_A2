@@ -64,14 +64,22 @@ python scripts/extended_eval.py --dataset ebnerd --method popular   # all 7 metr
 These reuse `src/metrics.py`, so they cannot drift from the `metrics_<split>.json`
 each run writes.
 
-Q5/Q7.3 Codabench submissions (§2I), writing `data/submissions/<dataset>_nrms_freshness.zip`:
+Q5/Q7.3 Codabench submissions (§2I), writing `data/submissions/<dataset>_nrms_<arm>.zip`:
 
 ```bash
 python scripts/verify_fast_scorer.py --dataset ebnerd   # gate: fast scorer == committed metrics
 python run_submit.py --dataset mind --limit 5000        # smoke test
-python run_submit.py --dataset mind                     # full file, ~3 min
+python run_submit.py --dataset mind                     # full file, ~4 min
 python run_submit.py --dataset ebnerd                   # full file, ~4 min
+
+# The NRMS baseline, so both boards show the Q3 comparison
+python scripts/verify_fast_scorer.py --dataset ebnerd --arm baseline
+python run_submit.py --dataset mind   --arm baseline
+python run_submit.py --dataset ebnerd --arm baseline
 ```
+
+`--arm` is a run-tag subdirectory (default `freshness`) or `baseline` for the
+unflagged run; the model's arm is read off its checkpoint.
 
 The official test sets are downloaded separately from the training bundles
 (`MINDlarge_test.zip` from the HuggingFace MIND repo, `ebnerd_testset.zip` from
