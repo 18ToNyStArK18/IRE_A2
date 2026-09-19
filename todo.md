@@ -11,6 +11,10 @@ Open work only, as of 2026-09-17 (due 2026-09-20). Finished items live in
 
 ## Results still missing
 
+- [ ] **Run `scripts/rerun_history_content.sh`** (history-content features are now
+      default on, so every re-ranker artifact must be regenerated), then fill in
+      DesignChoices §2K and its dated notes.
+
 - [x] ~~Paired bootstrap 95% CIs for the §2E re-ranker before/after deltas~~ — in
       `results/serving_features_ablation_*.json` (`deltas_vs_stage1`), 2026-09-19.
 - [ ] Q1 feature-group ablation under the chosen 49-random-negative sampling (§2E's
@@ -24,5 +28,5 @@ Open work only, as of 2026-09-17 (due 2026-09-20). Finished items live in
 
 - [ ] A fair Q3 head-to-head of NRMS and the re-ranker on identical candidate sets
       (MRR over 200 candidates is not NRMS's MRR over the in-view list).
-- [ ] Bi-encoder similarity feature for the re-ranker (§2.6; closes the Q1.1
-      "embeddings" channel). Embeddings are now built for both datasets.
+- [x] ~~Bi-encoder similarity feature for the re-ranker~~ — implemented as the
+      history-content features (DesignChoices §2K), 2026-09-19.

@@ -20,9 +20,10 @@ retrieved candidates legitimately get label 0.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
-from src import article_stats, sessionize
+from src import article_stats, config, history_content, sessionize
 from src.candidate_features import build_candidate_features
 from src.impression_features import build_impression_features
 
@@ -36,6 +37,22 @@ _FLUSH_ROWS = 250_000
 def load_articles_lookup(processed_dir) -> dict[str, dict]:
     articles = pd.read_parquet(processed_dir / "articles.parquet", columns=["article_id", "category"])
     return {row.article_id: {"category": row.category} for row in articles.itertuples(index=False)}
+
+
+def history_content_columns(processed_dir, dataset: str, candidates_df: pd.DataFrame, histories: dict):
+    """Both history_content features for every candidate row, as arrays aligned
+    to candidates_df's row positions -- 16 bytes a row rather than a dict, which
+    matters at MIND's 2.7M training rows. One scorer call per impression."""
+    scorer = history_content.get_scorer(processed_dir, dataset)
+    title = np.full(len(candidates_df), np.nan)
+    cosine = np.full(len(candidates_df), np.nan)
+    article_ids = candidates_df["article_id"].to_numpy()
+    for impression_id, positions in candidates_df.groupby("impression_id", sort=False).indices.items():
+        if impression_id in histories:
+            title[positions], cosine[positions] = scorer.score(
+                histories[impression_id], article_ids[positions].tolist()
+            )
+    return title, cosine
 
 
 def build_feature_matrix(
@@ -76,14 +93,21 @@ def build_feature_matrix(
     true_clicks: dict[str, set[str]] = {}
     impression_feats: dict[str, dict] = {}
     impression_time: dict[str, object] = {}
+    histories: dict[str, object] = {}
     for row in behaviors.itertuples(index=False):
         true_clicks[row.impression_id] = {c for c, l in zip(row.candidates, row.labels) if l == 1}
         impression_feats[row.impression_id] = build_impression_features(row, articles_lookup)
         impression_time[row.impression_id] = row.time
+        histories[row.impression_id] = row.history
+
+    content = (
+        history_content_columns(processed_dir, dataset, candidates_df, histories)
+        if config.HISTORY_CONTENT_FEATURES else None
+    )
 
     frames: list[pd.DataFrame] = []
     rows = []
-    for cand in candidates_df.itertuples(index=False):
+    for position, cand in enumerate(candidates_df.itertuples(index=False)):
         impr_id = cand.impression_id
         impr_feat = impression_feats.get(impr_id)
         if impr_feat is None:
@@ -101,6 +125,9 @@ def build_feature_matrix(
         row_out = {"impression_id": impr_id, "article_id": cand.article_id}
         row_out.update({k: v for k, v in impr_feat.items() if not k.startswith("_")})
         row_out.update(cand_feat)
+        if content is not None:
+            row_out["history_title_bm25"] = content[0][position]
+            row_out["history_embedding_cosine"] = content[1][position]
         row_out["label"] = int(cand.article_id in true_clicks[impr_id])
         rows.append(row_out)
         if len(rows) >= _FLUSH_ROWS:

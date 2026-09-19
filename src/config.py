@@ -139,3 +139,10 @@ CLICK_REPORTING_LAG_MINUTES = 10  # clicks land after their impression, so recen
 # before the impression being scored. Lives here rather than in either consumer
 # so the two cannot drift into different definitions of "age".
 ARTICLE_STATS_SPLITS = ("train", "val", "test")
+
+# A2 Q1.1: similarity of each candidate to the user's clicked-article titles and
+# embeddings (src/history_content.py), fed to the re-ranker for every stage-1
+# method. The `popular` arm's retrieval_score is a click count, so without these
+# the shipped re-ranker saw history content only through category. False
+# reproduces the 22-feature models behind the 2026-09-19 reports.
+HISTORY_CONTENT_FEATURES = True

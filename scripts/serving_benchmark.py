@@ -23,10 +23,11 @@ What IS timed is what a request actually has to do with the state already in
 memory: rank the current pool (stage 1), build features for the top-K
 (stage 2a), and score them with the booster (stage 2b).
 
-The ANN and BM25 indexes are measured for memory only. They belong to the
-`semantic` / `bm25` stage-1 ablation arms, not to the shipped `popular` path,
-which needs no index at all -- itself a Q4 finding: replacing similarity
-retrieval with a recency window removed the index from the serving path.
+The ANN and BM25 indexes are no longer stage-1-only: since the history-content
+features (src/history_content.py, config.HISTORY_CONTENT_FEATURES) the shipped
+re-ranker scores every request's candidates against the user's history with
+both, so they are part of the serving footprint and their per-request cost is
+timed inside stage 2a.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src import article_stats, config, fresh_pool, sessionize  # noqa: E402
+from src import article_stats, config, fresh_pool, history_content, sessionize  # noqa: E402
 from src.candidate_features import build_candidate_features  # noqa: E402
 from src.feature_pipeline import load_articles_lookup  # noqa: E402
 from src.impression_features import build_impression_features  # noqa: E402
@@ -177,7 +178,7 @@ def sample_requests(behaviors: pd.DataFrame, n: int) -> pd.DataFrame:
     return ordered.iloc[start : start + n]
 
 
-def benchmark_latency(requests, pool, articles_lookup, article_index, booster, features, k):
+def benchmark_latency(requests, pool, articles_lookup, article_index, booster, features, k, content_scorer=None):
     """One timed pass. Returns per-stage millisecond samples plus pool sizes."""
     stage1, stage2a, stage2b, totals, pool_sizes, ingest = [], [], [], [], [], []
 
@@ -197,12 +198,19 @@ def benchmark_latency(requests, pool, articles_lookup, article_index, booster, f
         impression_features = build_impression_features(row, articles_lookup)
         weights = impression_features["_history_category_weights"]
         shared = {key: value for key, value in impression_features.items() if not key.startswith("_")}
+        content = (
+            content_scorer.score(row.history, [article_id for article_id, _ in ranked])
+            if content_scorer is not None else None
+        )
         matrix = np.empty((len(ranked), len(features)), dtype=np.float64)
         for position, (article_id, score) in enumerate(ranked):
             row_features = dict(shared)
             row_features.update(
                 build_candidate_features(article_id, position + 1, score, row.time, weights, article_index)
             )
+            if content is not None:
+                row_features["history_title_bm25"] = content[0][position]
+                row_features["history_embedding_cosine"] = content[1][position]
             matrix[position] = [row_features[name] for name in features]
         t2 = time.perf_counter()
 
@@ -273,9 +281,10 @@ def main() -> None:
         "Each component is built in its own process; rss_mib is the resident-set "
         "growth attributable to it once its dependencies are already loaded, and "
         "explicit_mib is the exact array/frame bytes where they are walkable. "
-        "bm25_inverted_index and semantic_ann_index belong to the stage-1 ablation "
-        "arms: the shipped `popular` path loads neither, which is why its serving "
-        "footprint is the fresh-pool window plus the article statistics index."
+        "With history-content features on, the shipped `popular` path also holds "
+        "bm25_inverted_index and semantic_ann_index (they score each request's "
+        "candidates against the user's history), so its serving footprint is the "
+        "fresh-pool window, the article statistics index and those two."
     )
 
     # ---- startup state for the latency pass --------------------------------
@@ -304,18 +313,24 @@ def main() -> None:
 
     booster = lgb.Booster(model_file=str(model_path))
     features = booster.feature_name()
+    # Startup, not request work: built once, like the article index above.
+    content_scorer = (
+        history_content.get_scorer(processed_dir, args.dataset)
+        if set(history_content.FEATURES) <= set(features) else None
+    )
     report["model"] = {
         "path": str(model_path.relative_to(processed_dir.parent.parent)),
         "num_trees": booster.num_trees(),
         "num_features": len(features),
+        "history_content_features": content_scorer is not None,
     }
 
     # ---- latency -------------------------------------------------------------
     requests = sample_requests(behaviors, args.requests + args.warmup)
     warm, timed = requests.iloc[: args.warmup], requests.iloc[args.warmup :]
-    benchmark_latency(warm, pool, articles_lookup, article_index, booster, features, args.k)
+    benchmark_latency(warm, pool, articles_lookup, article_index, booster, features, args.k, content_scorer)
     report["latency"] = benchmark_latency(
-        timed, pool, articles_lookup, article_index, booster, features, args.k
+        timed, pool, articles_lookup, article_index, booster, features, args.k, content_scorer
     )
     report["latency"]["n_requests"] = int(len(timed))
 
@@ -342,7 +357,7 @@ def main() -> None:
     for k in [int(x) for x in args.scaling_ks.split(",")]:
         subset = timed.iloc[: min(200, len(timed))]
         pool_k = fresh_pool.FreshPool(log)
-        result = benchmark_latency(subset, pool_k, articles_lookup, article_index, booster, features, k)
+        result = benchmark_latency(subset, pool_k, articles_lookup, article_index, booster, features, k, content_scorer)
         scaling[f"k={k}"] = {
             "total_ms_mean": result["total_request"]["mean_ms"],
             "stage2a_ms_mean": result["stage2a_feature_building"]["mean_ms"],

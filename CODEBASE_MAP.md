@@ -92,6 +92,7 @@ Legend: **[A1]** = came from A1 (commits `b679970`, `a12cf9f`, or later ports). 
 - **`sessionize.py`**: Tests: `test_feature_engineering`.
 - **`impression_features.py`**: `recency_weighted_engagement` tested. **`history_category_weights`, `avg_history_dwell_time`, `build_impression_features` untested.**
 - **`candidate_features.py`**: `position_bias` and `category_features` tested; the others only indirectly. `position_bias` docstring says "A1 top-K" rather than stage-1 rank.
+- **`history_content.py`** (added 2026-09-19): Q1.1 history-title BM25 and history-embedding cosine features for the re-ranker, from A1's query construction, BM25 index and pooled user embeddings. ← feature_pipeline, serving_benchmark. Switch: `config.HISTORY_CONTENT_FEATURES`. Tests: `test_history_content`.
 - **`feature_pipeline.py`**: `build_feature_matrix` ← reranker; `load_articles_lookup` ← serving_benchmark. **Dead:** the `load_candidates` re-export (A2-only, no caller). Docstring contract omits `retrieval_score`. Tests: indirect.
 - **`reranker.py`**: Q2 LambdaMART, CLI, ← extended_eval. **`train`, `run`, `_training_impressions`, `summary_table` untested.** Docstring says "Two things" but lists 3, and points 1–2 are catalogue-era.
 

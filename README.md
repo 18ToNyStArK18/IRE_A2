@@ -35,7 +35,9 @@ python run_nrms.py --dataset mind   --stage all --epochs 10 --freshness
 python -m pytest tests/
 ```
 
-Steps 2–3 accept `--dataset mind|ebnerd` to run one dataset. NRMS logs to W&B
+Steps 2–3 accept `--dataset mind|ebnerd` to run one dataset. After changing
+re-ranker features, `bash scripts/rerun_history_content.sh` regenerates every
+re-ranker artifact (reports, Q9, extended eval, serving) in one go. NRMS logs to W&B
 when `WANDB_API_KEY` is set (via `.env`); pass `--no-wandb` to skip it.
 
 ## Analysis scripts

@@ -24,6 +24,10 @@ Which features a live system would not have
                           but unlike the article stats this feature applies no
                           reporting lag, so it is dropped in a stricter arm.
 
+A fourth arm, `no_history_content`, drops the two history-content features
+(src/history_content.py) instead. They ARE available at serving time; the arm is
+here because the same paired harness gives their contribution, with a CI.
+
 Every arm is trained exactly as `reranker.run` trains the shipped model -- same
 impressions, same negative sampling, same seed -- and differs only in its feature
 list. The `all` arm must therefore reproduce report_<method>_test.json, which is
@@ -43,7 +47,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src import reranker  # noqa: E402
+from src import history_content, reranker  # noqa: E402
 from src.metrics import per_impression_metrics  # noqa: E402
 
 METRICS = ("auc", "mrr", "ndcg@5", "ndcg@10")
@@ -52,6 +56,9 @@ ARMS = {
     "all": (),
     "serving_safe": UNAVAILABLE,
     "serving_safe_strict": UNAVAILABLE + ("session_clicks_before",),
+    # Not a Q9 arm: the history-content features are serving-safe. This measures
+    # what they add, on the same paired harness.
+    "no_history_content": history_content.FEATURES,
 }
 
 
@@ -176,7 +183,7 @@ def main() -> None:
         "dropped_feature_gain_share_in_all": {
             f: float(g / sum(boosters["all"].feature_importance("gain")))
             for f, g in zip(boosters["all"].feature_name(), boosters["all"].feature_importance("gain"))
-            if f in ARMS["serving_safe_strict"]
+            if f in {g for dropped in ARMS.values() for g in dropped}
         },
         "check_all_arm_reproduces_report": {"max_abs_deviation": deviation, "ok": deviation < 1e-9},
         "n_impressions": n_total,

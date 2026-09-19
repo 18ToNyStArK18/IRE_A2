@@ -1513,6 +1513,54 @@ Gain share of the dropped features in the `all` model: `impression_size` 4.9%
   in-view list, which is exactly the task both leaderboards score, so that list is
   its input by construction rather than a leak.
 
+## 2K. Q1.1 — history-content features in the re-ranker (2026-09-19)
+
+**Implemented; results pending** the rerun (`scripts/rerun_history_content.sh`,
+run on a separate machine). Numbers and the dated notes in §2E/§2G/§2H/§2J will
+be filled in from its output.
+
+### Why
+
+Q1.1 asks for click-history features over the user's recent clicked articles'
+"titles, categories, **embeddings**". Titles and embeddings already drive the
+`bm25`/`bm25_fresh` (history-title BM25) and `semantic` (pooled history
+embeddings) stage-1 arms -- where they reach the re-ranker as `retrieval_score` --
+and NRMS. But the **shipped `popular` re-ranker** saw history content only through
+category: its `retrieval_score` is a click count. This closes that gap, and the
+§2.6 decision's "bi-encoder similarity feature" with it.
+
+### Design
+
+`src/history_content.py`, two features for every stage-1 method, built entirely
+from A1 code (`config.HISTORY_CONTENT_FEATURES`, default on):
+
+| feature | definition |
+|---|---|
+| `history_title_bm25` | A1's history-title query (`BM25_CANDIDATE_CONFIG`: titles of the last 10 clicks; MIND `tfidf_keywords`, EB-NeRD `recency_weighted`) scored against the candidate with A1's BM25 index over title+abstract |
+| `history_embedding_cosine` | cosine between the candidate and A1's pooled user embedding (`SEMANTIC_CANDIDATE_CONFIG`: MIND mean, EB-NeRD max over the full history) |
+
+NaN means no usable history, never "dissimilar". Embedding coverage is 100% of
+both catalogues and of every `popular` test candidate. One scorer call per
+impression; the scorer is cached per process so chunked evaluation builds the
+BM25 index once. Switching it off reproduces the 22-feature models exactly: on
+EB-NeRD val every original column is bit-identical with the switch on or off.
+
+**Leakage (Q9):** only the impression's own `history` -- clicks strictly before
+it -- and static catalogue text and vectors are read, so both features are
+available at serving time and stay in §2J's serving-safe arms.
+`scripts/serving_features_ablation.py` gains a `no_history_content` arm, which
+gives their contribution as a paired CI on the same harness.
+
+**Serving:** `scripts/serving_benchmark.py` now computes both per request inside
+the timed feature-building stage. This changes a §2G finding: the shipped path
+now holds the BM25 index and the embedding table, so "the shipped path has no ANN
+index" no longer holds.
+
+**Expectation, stated before the numbers:** on EB-NeRD val the raw means barely
+separate clicked from non-clicked candidates (title BM25 42.8 vs 43.0, cosine
+0.598 vs 0.598) -- consistent with §2E's finding that history similarity is a weak
+signal within a fresh pool. A small gain, or none, would not be a surprise.
+
 ## 3. Open decisions
 
 - [x] ~~Sign-off on §1.4 (LambdaMART primary) and §2.6 (no cross-encoder).~~
@@ -1544,6 +1592,7 @@ Gain share of the dropped features in the `all` model: `impression_size` 4.9%
 - [ ] The Q1 feature-group ablation under the chosen random-negative sampling
       (§2E's candidate-level-only arm ran under the discarded hard negatives).
 - [ ] A fair Q3 head-to-head with NRMS on identical candidate sets.
+- [ ] Fill in §2K's results once `scripts/rerun_history_content.sh` has run.
 
 ## 4. Changelog
 
@@ -1645,3 +1694,9 @@ Gain share of the dropped features in the `all` model: `impression_size` 4.9%
   [+0.0248, +0.0305] over stage 1 (+17% rather than +28%). MIND MRR unchanged.
   `has_known_publish_time` carries 0% gain on both, confirming §2E. Also supplies
   §2E's missing paired CIs. Flagged the +28% headline in "Current state" and §2E.
+- **2026-09-19** — Added §2K: history-title (BM25) and history-embedding (cosine)
+  similarity features for the re-ranker, default on, built from A1's query
+  construction, BM25 index and pooled user embeddings (`src/history_content.py`).
+  Closes the Q1.1 titles/embeddings gap for the shipped `popular` arm. Serving
+  benchmark and the Q9 ablation (new `no_history_content` arm) updated. Results
+  pending the rerun on a separate machine.
