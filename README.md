@@ -61,6 +61,13 @@ Q5 extended evaluation (§2H), writing `results/extended_eval_<dataset>_<method>
 python scripts/extended_eval.py --dataset ebnerd --method popular   # all 7 metrics, 2 slices, bootstrap CIs
 ```
 
+Q9 metrics with and without features a live system would not have (§ Q9), writing
+`results/serving_features_ablation_<dataset>.json`:
+
+```bash
+python scripts/serving_features_ablation.py --dataset ebnerd   # 3 arms, paired 95% CIs
+```
+
 These reuse `src/metrics.py`, so they cannot drift from the `metrics_<split>.json`
 each run writes.
 

@@ -11,13 +11,14 @@ Open work only, as of 2026-09-17 (due 2026-09-20). Finished items live in
 
 ## Results still missing
 
-- [ ] Paired bootstrap 95% CIs for the §2E re-ranker before/after deltas (Q3 requires CIs on claimed gains).
+- [x] ~~Paired bootstrap 95% CIs for the §2E re-ranker before/after deltas~~ — in
+      `results/serving_features_ablation_*.json` (`deltas_vs_stage1`), 2026-09-19.
 - [ ] Q1 feature-group ablation under the chosen 49-random-negative sampling (§2E's
       candidate-level-only arm ran under the discarded hard negatives).
-- [ ] Q9: report metrics with and without features unavailable at serving time.
-- [ ] Re-run `scripts/serving_benchmark.py` on the shipped `popular` model: both
-      `results/serving_*.json` timed `lambdamart_bm25.txt` (§2G caveat), and the
-      `popular` models now exist on this machine.
+- [x] ~~Q9: metrics with and without features unavailable at serving time~~ —
+      `scripts/serving_features_ablation.py`, 2026-09-19. Not yet written up in DesignChoices / the design note.
+- [x] ~~Re-run `scripts/serving_benchmark.py` on the shipped `popular` model~~ — done in the
+      2026-09-17 rerun; `design_note.md` §7 still quotes the old bm25 numbers.
 
 ## Nice to have
 

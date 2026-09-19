@@ -13,6 +13,8 @@ Last updated: 2026-09-11
 > is LambdaMART trained on 49 random negatives per group, with Q1 article
 > statistics taken as-of each impression over every earlier event. Test MRR after
 > re-ranking: **0.2102 (EB-NeRD, +28% over stage 1) / 0.2239 (MIND, flat)**.
+> *(2026-09-19, §2J: with the two features a live system would not have removed,
+> EB-NeRD is **0.1915, +17%** over stage 1, CI clear of zero. Quote both.)*
 > Sections 0–2D document the catalogue-candidate phase that came first; where §2E
 > overturned their premises they carry a dated note. Read §2E for the current
 > pipeline.
@@ -758,7 +760,8 @@ Against the catalogue pipeline (§2D), MRR goes 0.0182 → **0.2102** on EB-NeRD
 
 ### Caveats
 
-- **No paired bootstrap CIs yet** (Q3 requires them). EB-NeRD's +28% over 25k
+- **No paired bootstrap CIs yet** *(done 2026-09-19, §2J: EB-NeRD MRR +0.0463
+  [+0.0430, +0.0495] over stage 1, +0.0275 serving-safe)*. EB-NeRD's +28% over 25k
   impressions is very likely significant; MIND's +0.1% is not a gain.
 - The pool leans on the platform's own display log. That is legitimate at serving
   time, but it rides the platform's recommender. An EB-NeRD variant with no logs
@@ -1440,6 +1443,76 @@ null offline (§2H).
 
 ---
 
+## 2J. Q9 — metrics with and without features unavailable at serving time (2026-09-19)
+
+`scripts/serving_features_ablation.py` → `results/serving_features_ablation_<dataset>.json`.
+Q9 asks for metrics with and without any feature a live system would not have. All
+22 re-ranker features were audited; three were in question.
+
+### Which features a live system would not have
+
+| feature | verdict | why |
+|---|---|---|
+| `impression_size` | **unavailable** | `len()` of the impression's own in-view list. On EB-NeRD `article_ids_inview` is the articles that came *into view*, which grows with how long the user stays on the page: **Spearman 0.50 with that impression's own `read_time`** (EB-NeRD demo train, 24,724 impressions), an outcome known only afterwards. On MIND it is the platform's list length for the impression being ranked, which a two-stage system choosing its own 200 candidates would not have either. |
+| `has_known_publish_time` | **unavailable** | Read off the dataset's `published_time` snapshot, taken after the logs; it flags exactly the articles bulk re-stamped on 2023-06-29 (§2E). |
+| `session_clicks_before` | borderline | Clicks on earlier impressions in the same session. A live session store holds most of them, but unlike the article statistics this feature applies no click-reporting lag. Dropped only in a stricter third arm. |
+
+The other 19 are available: history-derived, stage-1-derived, or as-of article
+statistics that already apply the 10-minute click lag.
+
+### Design
+
+Three arms — `all` (22 features), `serving_safe` (drops the two unavailable
+features), `serving_safe_strict` (also drops `session_clicks_before`) — trained
+exactly as `reranker.run` trains the shipped model: same train impressions (MIND
+60k cap), same 49 random negatives, same seed. Only the feature list differs. The
+`all` arm therefore has to reproduce `report_popular_test.json`, and does (max
+deviation 1e-14 EB-NeRD, 6e-14 MIND), which validates the training path. Every
+test impression is scored by all arms in one chunked pass; deltas are **paired**
+over impressions (2,000 resamples, seed 0), with MRR/nDCG averaged over the full
+population exactly as the reports are.
+
+### Results — test, `popular` candidates
+
+| | EB-NeRD MRR | EB-NeRD nDCG@5 | EB-NeRD nDCG@10 | MIND MRR | MIND nDCG@10 | MIND AUC |
+|---|---|---|---|---|---|---|
+| stage 1 (before) | 0.1639 | 0.1471 | 0.1994 | 0.2237 | 0.2932 | 0.8655 |
+| `all` (as reported) | 0.2102 | 0.2007 | 0.2691 | 0.2239 | 0.2980 | 0.8799 |
+| **`serving_safe`** | **0.1915** | **0.1773** | **0.2407** | 0.2234 | 0.2951 | 0.8756 |
+| `serving_safe_strict` | 0.1913 | 0.1777 | 0.2401 | 0.2236 | 0.2954 | 0.8756 |
+
+| paired Δ, 95% CI | EB-NeRD MRR | EB-NeRD nDCG@10 | MIND MRR | MIND nDCG@10 |
+|---|---|---|---|---|
+| `serving_safe` − `all` | **−0.0187** [−0.0210, −0.0163] | −0.0284 [−0.0310, −0.0258] | −0.0005 [−0.0018, +0.0007] | −0.0029 [−0.0041, −0.0017] |
+| `all` − stage 1 | +0.0463 [+0.0430, +0.0495] | +0.0697 [+0.0660, +0.0732] | +0.0003 [−0.0012, +0.0017] | +0.0048 [+0.0034, +0.0061] |
+| **`serving_safe` − stage 1** | **+0.0275** [+0.0248, +0.0305] | **+0.0413** [+0.0380, +0.0446] | −0.0003 [−0.0014, +0.0008] | +0.0018 [+0.0009, +0.0027] |
+
+Gain share of the dropped features in the `all` model: `impression_size` 4.9%
+(EB-NeRD) / 12.4% (MIND), `session_clicks_before` 1.1% / 0.0%,
+`has_known_publish_time` **0.0%** on both.
+
+### What it changes
+
+- **The EB-NeRD headline was partly `impression_size`.** Without it the re-ranker
+  still beats stage 1 by a clear margin — MRR +0.0275 [+0.0248, +0.0305], **+17%
+  rather than +28%** — but ~40% of the reported MRR gain leaned on a feature that
+  partly encodes the user's own engagement with the impression being scored. Its
+  4.9% gain share understates that because gain measures split usage, not the
+  ranking change it buys at the top. **Report both numbers**; the serving-safe one
+  is what a deployed system would get.
+- **MIND is unchanged in substance.** There was no MRR gain to lose (§2E); the
+  12.4% gain share shows up only as −0.0043 AUC and −0.0029 nDCG@10.
+- **The §2E future-article shortcut is confirmed gone.** `has_known_publish_time`
+  carries exactly zero gain for fresh-pool candidates on both datasets — the
+  measurement §2E's 0.003%-of-rows argument predicted.
+- **`session_clicks_before` is harmless**: the strict arm is indistinguishable from
+  `serving_safe` on every metric.
+- **This also supplies §2E's missing paired CIs** (§3), for both the reported and
+  the serving-safe re-ranker.
+- **NRMS is unaffected.** It uses none of these features. It ranks the given
+  in-view list, which is exactly the task both leaderboards score, so that list is
+  its input by construction rather than a leak.
+
 ## 3. Open decisions
 
 - [x] ~~Sign-off on §1.4 (LambdaMART primary) and §2.6 (no cross-encoder).~~
@@ -1463,7 +1536,11 @@ null offline (§2H).
       explained by age-homogeneous candidate sets, not variance.
 - [x] ~~Generate the Codabench submission files.~~ **Done 2026-09-15** (§2I):
       both verified and waiting to be uploaded; screenshots still needed.
-- [ ] Paired bootstrap 95% CIs for the §2E before/after deltas.
+- [x] ~~Paired bootstrap 95% CIs for the §2E before/after deltas.~~ **Done
+      2026-09-19** (§2J): EB-NeRD MRR +0.0463 [+0.0430, +0.0495], serving-safe
+      +0.0275 [+0.0248, +0.0305]; MIND spans zero.
+- [x] ~~Q9: metrics with and without serving-unavailable features.~~ **Done
+      2026-09-19** (§2J).
 - [ ] The Q1 feature-group ablation under the chosen random-negative sampling
       (§2E's candidate-level-only arm ran under the discarded hard negatives).
 - [ ] A fair Q3 head-to-head with NRMS on identical candidate sets.
@@ -1560,3 +1637,11 @@ null offline (§2H).
   all four metrics for both arms, `scripts/verify_fast_scorer.py`) and turns
   ~19.5 h of scoring into 7 min. Confirmed via the Codabench API that both boards
   are open at 10 submissions/day. Upload and screenshots remain.
+- **2026-09-19** — Added §2J (Q9): re-ranker metrics with and without features a
+  live system would not have, via `scripts/serving_features_ablation.py`.
+  `impression_size` is outcome-contaminated on EB-NeRD (Spearman 0.50 with the
+  impression's own read time); dropping it with `has_known_publish_time` takes
+  EB-NeRD MRR 0.2102 → 0.1915 (−0.0187 [−0.0210, −0.0163]), still +0.0275
+  [+0.0248, +0.0305] over stage 1 (+17% rather than +28%). MIND MRR unchanged.
+  `has_known_publish_time` carries 0% gain on both, confirming §2E. Also supplies
+  §2E's missing paired CIs. Flagged the +28% headline in "Current state" and §2E.
