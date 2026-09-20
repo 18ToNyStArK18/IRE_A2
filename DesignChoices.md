@@ -15,6 +15,9 @@ Last updated: 2026-09-11
 > re-ranking: **0.2102 (EB-NeRD, +28% over stage 1) / 0.2239 (MIND, flat)**.
 > *(2026-09-19, §2J: with the two features a live system would not have removed,
 > EB-NeRD is **0.1915, +17%** over stage 1, CI clear of zero. Quote both.)*
+> *(2026-09-20, §2K: history-content features added. Current shipped numbers are
+> **0.2115 (EB-NeRD) / 0.2403 (MIND, +0.0167 over stage 1, CI clear of zero)** --
+> MIND is no longer flat.)*
 > Sections 0–2D document the catalogue-candidate phase that came first; where §2E
 > overturned their premises they carry a dated note. Read §2E for the current
 > pipeline.
@@ -753,7 +756,9 @@ Against the catalogue pipeline (§2D), MRR goes 0.0182 → **0.2102** on EB-NeRD
 - **EB-NeRD:** the re-ranker adds a lot on top of popularity, mostly through
   freshness, which rests on a real `published_time`.
 - **MIND:** a wash. 72% of the model's gain is stage-1 rank; it learned to trust
-  stage 1. MIND has no publish date, and within an hour-old pool "first seen" is
+  stage 1. *(Superseded 2026-09-20, §2K: with history-embedding similarity the
+  MIND re-ranker beats stage 1 by MRR +0.0167 [+0.0149, +0.0183]. The null was a
+  missing Q1.1 feature, not a property of MIND.)* MIND has no publish date, and within an hour-old pool "first seen" is
   close to uniform across candidates, so the Q1 features carry little beyond
   popularity. Same direction as §2D Finding 3, though no longer explained by the
   future-article shortcut, which is gone.
@@ -1135,7 +1140,9 @@ transients.
 | `lightgbm_booster` | 2.7 MiB rss | 3.1 MiB rss | **yes** |
 
 **The Q4 question "measure your ANN index" has an interesting answer: the shipped
-path has no ANN index.** Replacing similarity retrieval with a recency window
+path has no ANN index.** *(Superseded 2026-09-20, §2K: the history-content
+features put the BM25 index and the embedding table back in the shipped path --
+MIND's resident footprint goes 68.1 → 199.7 MiB and p99 6.99 → 8.00 ms.)* Replacing similarity retrieval with a recency window
 (§2E) deleted the largest serving structure — 95.6 MiB on MIND — while taking
 recall from 2.90% to 93.9%. The serving footprint is now the fresh-pool window
 plus the article-statistics index.
@@ -1207,6 +1214,9 @@ Run on the shipped **`popular`** arm for both datasets. The first version of
 this section reported the `bm25` arm, which was the only model on the machine it
 was written on; those numbers are kept below as a contrast because the gap
 between them is itself the §2E result.
+
+*(Updated 2026-09-20 by §2K: the shipped accuracy figures are now EB-NeRD
+nDCG@5 0.2026 / MIND 0.2618. The table below is the pre-history-content run.)*
 
 ### Results, test split, top-10 for beyond-accuracy
 
@@ -1491,6 +1501,10 @@ Gain share of the dropped features in the `all` model: `impression_size` 4.9%
 (EB-NeRD) / 12.4% (MIND), `session_clicks_before` 1.1% / 0.0%,
 `has_known_publish_time` **0.0%** on both.
 
+*(Re-measured 2026-09-20 on the 24-feature models, §2K: EB-NeRD
+`serving_safe` − `all` is MRR −0.0218 [−0.0246, −0.0191], MIND −0.0007
+[−0.0019, +0.0006]. The conclusions below are unchanged.)*
+
 ### What it changes
 
 - **The EB-NeRD headline was partly `impression_size`.** Without it the re-ranker
@@ -1514,10 +1528,6 @@ Gain share of the dropped features in the `all` model: `impression_size` 4.9%
   its input by construction rather than a leak.
 
 ## 2K. Q1.1 — history-content features in the re-ranker (2026-09-19)
-
-**Implemented; results pending** the rerun (`scripts/rerun_history_content.sh`,
-run on a separate machine). Numbers and the dated notes in §2E/§2G/§2H/§2J will
-be filled in from its output.
 
 ### Why
 
@@ -1558,8 +1568,82 @@ index" no longer holds.
 
 **Expectation, stated before the numbers:** on EB-NeRD val the raw means barely
 separate clicked from non-clicked candidates (title BM25 42.8 vs 43.0, cosine
-0.598 vs 0.598) -- consistent with §2E's finding that history similarity is a weak
-signal within a fresh pool. A small gain, or none, would not be a surprise.
+0.598 vs 0.598), so a small gain or none would not be a surprise. That held for
+EB-NeRD and was **wrong for MIND**.
+
+### Results (2026-09-20 rerun, `scripts/rerun_history_content.sh`, 46 min)
+
+Test split, `popular` candidates, paired over impressions (2,000 resamples).
+`no_history_content` is the same model without the two features, so the delta is
+what they contribute.
+
+| | EB-NeRD MRR | EB-NeRD nDCG@5 | MIND MRR | MIND nDCG@5 |
+|---|---|---|---|---|
+| stage 1 (before) | 0.1639 | 0.1471 | 0.2237 | 0.2451 |
+| without the features (§2E's model) | 0.2102 | 0.2007 | 0.2239 | 0.2450 |
+| **with them (shipped now)** | **0.2115** | **0.2026** | **0.2403** | **0.2618** |
+| paired Δ, 95% CI | +0.0013 [−0.0008, +0.0034] | +0.0018 [−0.0005, +0.0043] | **+0.0164** [+0.0149, +0.0178] | **+0.0167** [+0.0151, +0.0184] |
+
+**MIND: the §2E null was a missing feature, not the dataset.** Its re-ranker now
+beats stage 1 by MRR **+0.0167 [+0.0149, +0.0183]**, where the 22-feature model
+managed +0.0003 [−0.0012, +0.0017] -- a CI containing zero. Essentially the whole
+gain is these two features. `history_embedding_cosine` alone takes **10.4%** of
+the model's gain (title BM25 0.7%). §2H's headline nDCG@5 rises 0.2450 → **0.2618**
+[0.2593, 0.2643].
+
+**EB-NeRD: no effect.** +0.0013 MRR with a CI spanning zero; the features take
+1.2% / 0.8% of gain against freshness's 52%. The model is bigger for nothing
+(174 trees vs 99).
+
+**Why the datasets split so cleanly.** It is the embedding space, the same cause
+§2H found for diversity: MIND's MiniLM vectors are contrastively trained and
+spread out (random-pair diversity 0.94), so cosine to a user's history
+discriminates. EB-NeRD's provided multilingual BERT vectors sit in a narrow cone
+(random-pair diversity 0.048, mean candidate cosine 0.598 with clicked and
+non-clicked identical to three decimals), so the same feature carries almost no
+signal. **A bi-encoder feature is only as good as the geometry of the space it
+reads**, which is the transferable lesson.
+
+**Slices (§2H, MIND):** warm users gain far more than cold-start ones
+(nDCG@5 0.2422 → 0.2616 warm, 0.2580 → 0.2625 cold-start), which is what a feature
+computed from click history should do. It also closes the cold-start/warm gap
+§2H reported.
+
+**The arms agree.** Gains land only where candidates are all fresh and the
+similarity is not already the ranking signal: MIND/`popular` +0.0164 MRR,
+MIND/`bm25_fresh` +0.0033, EB-NeRD/`bm25_fresh` +0.0018, EB-NeRD/`popular`
++0.0013, and ±0.0006 on the four catalogue arms, where `retrieval_score` already
+carries the same similarity.
+
+**Q9 (§2J) re-measured on the new models.** Dropping the serving-unavailable
+features costs EB-NeRD MRR −0.0218 [−0.0246, −0.0191] and MIND −0.0007
+[−0.0019, +0.0006]; `has_known_publish_time` still carries 0.0% gain on both. The
+history-content features are themselves serving-safe, so MIND's serving-safe arm
+keeps the gain: +0.0160 [+0.0145, +0.0175] over stage 1.
+
+### Serving cost (§2G, same laptop)
+
+| | EB-NeRD | MIND |
+|---|---|---|
+| total p99 | 6.44 → **10.50 ms** | 6.99 → **8.00 ms** |
+| single-core QPS | 336 → 170 | 321 → 253 |
+| USD / 1k queries | 0.00014 → 0.000278 | 0.000147 → 0.000186 |
+| shipped-path memory (MIND explicit) | — | 68.1 → **199.7 MiB** (+36.0 BM25 index, +95.6 embedding table) |
+
+Two separate causes, worth keeping apart: feature building grows by ~1.1 ms
+(EB-NeRD) / ~0.5 ms (MIND) for one BM25 query plus 200 dot products, and scoring
+grows because the extra signal delays early stopping (174 vs 99 trees on EB-NeRD).
+Both still pass the 100 ms SLA with ~10x margin.
+
+**This overturns a §2G finding.** "The shipped path has no ANN index" is no longer
+true: it now carries the BM25 index and the embedding table. For the 10x
+argument that matters, because those grow with **catalogue size**, not with
+traffic, so they scale differently from `article_stats_index` -- which remains the
+binding constraint, but no longer the only resident structure.
+
+**The honest trade:** MIND buys a significant ranking gain for ~25% more serving
+cost; EB-NeRD pays ~2x for a gain whose CI includes zero. On EB-NeRD alone the
+features would not be worth shipping.
 
 ## 3. Open decisions
 
@@ -1592,7 +1676,8 @@ signal within a fresh pool. A small gain, or none, would not be a surprise.
 - [ ] The Q1 feature-group ablation under the chosen random-negative sampling
       (§2E's candidate-level-only arm ran under the discarded hard negatives).
 - [ ] A fair Q3 head-to-head with NRMS on identical candidate sets.
-- [ ] Fill in §2K's results once `scripts/rerun_history_content.sh` has run.
+- [x] ~~Fill in §2K's results.~~ **Done 2026-09-20**: MIND +0.0167 MRR over
+      stage 1 (CI clear of zero), EB-NeRD no effect.
 
 ## 4. Changelog
 
@@ -1700,3 +1785,11 @@ signal within a fresh pool. A small gain, or none, would not be a surprise.
   Closes the Q1.1 titles/embeddings gap for the shipped `popular` arm. Serving
   benchmark and the Q9 ablation (new `no_history_content` arm) updated. Results
   pending the rerun on a separate machine.
+- **2026-09-20** — §2K results in, from the full re-ranker rerun (8 arms, Q9,
+  extended eval, serving; 46 min). MIND's §2E null is gone: history-embedding
+  similarity takes its re-ranker from +0.0003 MRR over stage 1 (CI spanning zero)
+  to **+0.0167 [+0.0149, +0.0183]**, with nDCG@5 0.2450 → 0.2618. EB-NeRD is
+  unaffected (+0.0013, CI spans zero) because its provided BERT vectors are
+  anisotropic. Serving cost rises (MIND p99 6.99 → 8.00 ms, footprint 68.1 →
+  199.7 MiB), which overturns §2G's "shipped path has no ANN index". Dated notes
+  added to "Current state", §2E, §2G, §2H and §2J.

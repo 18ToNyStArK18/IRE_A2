@@ -18,22 +18,22 @@
   "notes": [],
   "memory": {
     "behaviors_split": {
-      "rss_mib": 575.5,
+      "rss_mib": 618.4,
       "build_seconds": 0.3,
       "explicit_mib": 17.0
     },
     "articles_lookup": {
-      "rss_mib": 35.9,
+      "rss_mib": 35.8,
       "build_seconds": 0.03
     },
     "article_stats_index": {
-      "rss_mib": 111.4,
+      "rss_mib": 128.3,
       "build_seconds": 0.21,
       "explicit_mib": 4.8
     },
     "fresh_pool_log": {
-      "rss_mib": 136.9,
-      "build_seconds": 0.07,
+      "rss_mib": 132.6,
+      "build_seconds": 0.06,
       "explicit_mib": 7.5
     },
     "fresh_pool_windows": {
@@ -41,99 +41,100 @@
       "build_seconds": 0.0
     },
     "lightgbm_booster": {
-      "rss_mib": 4.2,
+      "rss_mib": 4.0,
       "build_seconds": 0.01
     },
     "bm25_inverted_index": {
-      "rss_mib": 271.5,
-      "build_seconds": 0.4,
+      "rss_mib": 271.3,
+      "build_seconds": 0.42,
       "explicit_mib": 4.1
     },
     "semantic_ann_index": {
-      "rss_mib": 278.6,
-      "build_seconds": 0.09,
+      "rss_mib": 276.3,
+      "build_seconds": 0.13,
       "explicit_mib": 34.5
     },
-    "_method": "Each component is built in its own process; rss_mib is the resident-set growth attributable to it once its dependencies are already loaded, and explicit_mib is the exact array/frame bytes where they are walkable. bm25_inverted_index and semantic_ann_index belong to the stage-1 ablation arms: the shipped `popular` path loads neither, which is why its serving footprint is the fresh-pool window plus the article statistics index."
+    "_method": "Each component is built in its own process; rss_mib is the resident-set growth attributable to it once its dependencies are already loaded, and explicit_mib is the exact array/frame bytes where they are walkable. With history-content features on, the shipped `popular` path also holds bm25_inverted_index and semantic_ann_index (they score each request's candidates against the user's history), so its serving footprint is the fresh-pool window, the article statistics index and those two."
   },
   "model": {
     "path": "processed/ebnerd/reranker/lambdamart_popular.txt",
-    "num_trees": 99,
-    "num_features": 22
+    "num_trees": 174,
+    "num_features": 24,
+    "history_content_features": true
   },
   "latency": {
     "stage1_candidate_generation": {
       "p50_ms": 0.117,
-      "p95_ms": 0.164,
-      "p99_ms": 0.179,
-      "mean_ms": 0.124
+      "p95_ms": 0.172,
+      "p99_ms": 0.224,
+      "mean_ms": 0.128
     },
     "stage2a_feature_building": {
-      "p50_ms": 2.282,
-      "p95_ms": 3.582,
-      "p99_ms": 3.965,
-      "mean_ms": 2.44
+      "p50_ms": 3.425,
+      "p95_ms": 4.994,
+      "p99_ms": 5.574,
+      "mean_ms": 3.565
     },
     "stage2b_model_scoring": {
-      "p50_ms": 0.093,
-      "p95_ms": 3.316,
-      "p99_ms": 4.044,
-      "mean_ms": 0.41
+      "p50_ms": 2.579,
+      "p95_ms": 4.188,
+      "p99_ms": 5.735,
+      "mean_ms": 2.191
     },
     "total_request": {
-      "p50_ms": 2.611,
-      "p95_ms": 5.969,
-      "p99_ms": 6.437,
-      "mean_ms": 2.974
+      "p50_ms": 5.97,
+      "p95_ms": 8.981,
+      "p99_ms": 10.502,
+      "mean_ms": 5.883
     },
     "ingest_per_impression_excluded_from_request": {
-      "p50_ms": 0.014,
-      "p95_ms": 0.04,
-      "p99_ms": 0.065,
-      "mean_ms": 0.017
+      "p50_ms": 0.016,
+      "p95_ms": 0.042,
+      "p99_ms": 0.072,
+      "mean_ms": 0.02
     },
     "candidates_per_request_mean": 200.0,
     "n_requests": 1000
   },
   "throughput_and_cost": {
-    "single_core_qps": 336.2,
-    "p99_ms": 6.437,
+    "single_core_qps": 170.0,
+    "p99_ms": 10.502,
     "meets_sla": true,
     "sla_ms": 100.0,
-    "usd_per_1000_queries": 0.00014,
+    "usd_per_1000_queries": 0.000278,
     "_method": "Single-threaded, one request at a time, so QPS is per core and scales with cores until memory or ingest becomes the limit. Cost assumes the core is saturated; real serving provisions for peak, so divide by the target utilisation to size a fleet."
   },
   "scaling": {
     "latency_vs_k": {
       "k=50": {
-        "total_ms_mean": 1.701,
-        "stage2a_ms_mean": 1.148,
-        "stage2b_ms_mean": 0.479
+        "total_ms_mean": 2.398,
+        "stage2a_ms_mean": 2.035,
+        "stage2b_ms_mean": 0.29
       },
       "k=100": {
-        "total_ms_mean": 2.122,
-        "stage2a_ms_mean": 1.594,
-        "stage2b_ms_mean": 0.436
+        "total_ms_mean": 3.495,
+        "stage2a_ms_mean": 2.594,
+        "stage2b_ms_mean": 0.808
       },
       "k=200": {
-        "total_ms_mean": 2.789,
-        "stage2a_ms_mean": 2.432,
-        "stage2b_ms_mean": 0.244
+        "total_ms_mean": 5.883,
+        "stage2a_ms_mean": 3.669,
+        "stage2b_ms_mean": 2.094
       }
     },
     "article_index_vs_event_volume": {
       "train": {
-        "rss_delta_mib": -207.7,
+        "rss_delta_mib": -153.0,
         "explicit_mib": 2.1,
         "distinct_articles": 2350
       },
       "train+val": {
-        "rss_delta_mib": 21.4,
+        "rss_delta_mib": 6.1,
         "explicit_mib": 2.3,
         "distinct_articles": 2478
       },
       "train+val+test": {
-        "rss_delta_mib": 18.1,
+        "rss_delta_mib": 31.2,
         "explicit_mib": 4.8,
         "distinct_articles": 3729
       }
