@@ -13,9 +13,9 @@ Open work only, as of 2026-09-17 (due 2026-09-20). Finished items live in
 
 - [x] ~~Run `scripts/rerun_history_content.sh` and fill in §2K~~ — done 2026-09-20.
       MIND's re-ranker now beats stage 1 (MRR +0.0167, CI clear of zero).
-- [ ] `design_note.md` is out of date: §5 quotes the pre-history-content re-ranker
-      numbers and the MIND "wash" finding (§2K), §7 quotes the pre-rerun serving
-      figures (§2G/§2K), and the +28% headline needs §2J's serving-safe figure.
+- [x] ~~`design_note.md` refreshed~~ — 2026-09-20: §4.2 (24 features), §5 results,
+      new §5.1 (history-similarity) and §5.2 (Q9), §5.3 slices, §7 serving, §8 10x,
+      §9 lessons. Still to do: export to PDF and add the leaderboard screenshots.
 
 - [x] ~~Paired bootstrap 95% CIs for the §2E re-ranker before/after deltas~~ — in
       `results/serving_features_ablation_*.json` (`deltas_vs_stage1`), 2026-09-19.

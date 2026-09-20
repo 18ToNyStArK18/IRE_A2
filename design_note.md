@@ -17,7 +17,7 @@ behaviour logs ──► unified schema ──► temporal split ──► featu
             (1-hour fresh pool, top-200)               scores the in-view list
                     │                                                │
             Stage 2: LambdaMART re-ranker                   + freshness arm
-            (22 behavioural features)
+            (24 behavioural features)
                     │
               ranked list ──► evaluation harness ──► Codabench submission
 ```
@@ -137,14 +137,14 @@ list, which is what MRR and nDCG@5 reward. `lambdarank_truncation_level` is set
 to 200 rather than LightGBM's default of 30: our positives began at median rank
 80, so the default would have left most of them outside the gradient window.
 
-### 4.2 Features (22)
+### 4.2 Features (24)
 
 | group | features |
 |---|---|
 | click history | click count, recency-weighted engagement, `has_history_timestamps` |
 | session | hour, day-of-week, impression size, session position, impressions/clicks earlier in session, avg history dwell time + availability flag |
 | article (as-of *t*) | click count, display count, log click count, smoothed CTR, log freshness, `has_known_publish_time` |
-| history × candidate | category binary match, category affinity |
+| history × candidate | category binary match, category affinity, **history-title BM25**, **history-embedding cosine** |
 | stage-1 output | retrieval rank, position bias, retrieval score |
 
 Two details worth reporting. **CTR is shrunk toward each dataset's own measured
@@ -153,6 +153,13 @@ base rate** (MIND 4.1%, EB-NeRD 8.9%) rather than a hand-picked constant; a flat
 elapsed time** where per-click timestamps exist (EB-NeRD); an earlier version
 weighted by list position, which for a plain count collapses to a function of
 history length and carries no recency signal at all.
+
+The two **history × candidate similarity** features close the Q1.1 "titles,
+categories, embeddings" requirement for the shipped arm, and were the last thing
+added: the fresh pool ranks by click counts, so without them history content
+reached the model only through category. Both reuse Assignment 1 directly — the
+same history-title BM25 query, and the same pooled user embedding — applied to
+whatever candidates stage 1 returned. §5.2 shows they decide the MIND result.
 
 ### 4.3 Two bugs that had to be fixed before the re-ranker beat stage 1
 
@@ -181,23 +188,80 @@ impressions.
 | | EB-NeRD | MIND |
 |---|---|---|
 | impressions / click in top-200 | 25,356 / 97.0% | 73,152 / 93.9% |
-| AUC | 0.8815 → **0.9213** [0.9199, 0.9227] | 0.8655 → 0.8799 [0.8786, 0.8813] |
-| MRR | 0.1639 → **0.2102** (+28.2%) | 0.2237 → 0.2239 (+0.1%) |
-| nDCG@5 | 0.1471 → **0.2007** (+36.5%) | 0.2451 → 0.2450 (−0.0%) |
-| nDCG@10 | 0.1994 → **0.2691** (+34.9%) | 0.2932 → 0.2980 (+1.6%) |
-| top features (gain) | freshness 53%, position bias 23% | position bias 57%, retrieval rank 15% |
+| AUC | 0.8815 → **0.9219** [0.9205, 0.9233] | 0.8655 → **0.8891** [0.8879, 0.8903] |
+| MRR | 0.1639 → **0.2115** (+29.0%) | 0.2237 → **0.2403** (+7.4%) |
+| nDCG@5 | 0.1471 → **0.2026** (+37.7%) | 0.2451 → **0.2618** (+6.8%) |
+| nDCG@10 | 0.1994 → **0.2705** (+35.7%) | 0.2932 → **0.3150** (+7.4%) |
+| top features (gain) | freshness 52%, position bias 20% | position bias 56%, retrieval rank 11%, history-embedding cosine 10% |
 
-**EB-NeRD gains substantially; MIND is a wash**, and the feature importances say
-why. On MIND, 72% of the model's gain comes from stage-1 rank — it learned to
-trust stage 1. MIND has no publish date, and inside an hour-old pool our
-"first-seen" proxy is nearly uniform across candidates, so the article features
-carry little beyond what popularity already encoded.
+Paired over impressions, both gains over stage 1 are significant: EB-NeRD MRR
+**+0.0476 [+0.0442, +0.0510]**, MIND **+0.0167 [+0.0149, +0.0183]**.
+
+**Both datasets gain — but MIND only once the re-ranker could compare candidates
+with the user's history.** With the 22-feature model MIND was a wash (MRR
+0.2237 → 0.2239, CI spanning zero) and we concluded it had "learned to trust
+stage 1". That conclusion was about a missing feature, not about MIND: adding the
+two history-similarity features moved it to +0.0167 MRR, essentially all of the
+dataset's gain (§5.1).
 
 For context, the same re-ranker on catalogue-wide candidates scored MRR 0.0182
 (EB-NeRD) and 0.0032 (MIND). **The 10× difference is stage-1 recall, not
 ranking** — a re-ranker cannot rank what it was never handed.
 
-### 5.1 Beyond-accuracy and slices (Q5)
+### 5.1 What the history-similarity features are worth, and why the datasets differ
+
+Same models with the two features removed, paired over test impressions:
+
+| | EB-NeRD MRR | MIND MRR | MIND nDCG@5 |
+|---|---|---|---|
+| without them | 0.2102 | 0.2239 | 0.2450 |
+| **with them** | **0.2115** | **0.2403** | **0.2618** |
+| paired Δ, 95% CI | +0.0013 [−0.0008, +0.0034] | **+0.0164** [+0.0149, +0.0178] | **+0.0167** [+0.0151, +0.0184] |
+
+**MIND gains; EB-NeRD gains nothing.** The cause is the embedding space, and it
+is the same measurement that made §5.3's diversity numbers incomparable: two
+random MIND articles have cosine 0.055, two random EB-NeRD articles 0.951. MIND's
+MiniLM vectors are contrastively trained and spread out, so cosine to a user's
+history discriminates; EB-NeRD's provided multilingual-BERT vectors occupy a
+narrow cone where clicked and non-clicked candidates average 0.598 to three
+decimals. `history_embedding_cosine` takes 10.4% of MIND's model gain and 0.8%
+of EB-NeRD's. **A bi-encoder feature is only as good as the geometry of the space
+it reads** — the same anisotropy that inverts a diversity metric also erases a
+ranking feature.
+
+The per-arm pattern agrees: gains appear only where candidates are uniformly
+fresh *and* the similarity is not already the ranking signal (MIND/`popular`
++0.0164, MIND/`bm25_fresh` +0.0033, EB-NeRD/`bm25_fresh` +0.0018,
+EB-NeRD/`popular` +0.0013), and are ±0.0006 on the four catalogue arms, where
+`retrieval_score` *is* that similarity.
+
+### 5.2 Metrics with and without serving-unavailable features (Q9)
+
+We audited all 24 features for what a live system would actually have and
+retrained without the two that fail:
+
+- **`impression_size`** — the length of the impression's own in-view list. On
+  EB-NeRD `article_ids_inview` records the articles that came *into view*, so it
+  grows with how long the user stays: **Spearman 0.50 with that impression's own
+  read time**, an outcome known only afterwards.
+- **`has_known_publish_time`** — read off a `published_time` snapshot taken after
+  the logs; it flags exactly the articles bulk re-stamped weeks later.
+
+| paired Δ vs the full model | EB-NeRD MRR | MIND MRR |
+|---|---|---|
+| serving-safe (22 features) | **−0.0218** [−0.0246, −0.0191] | −0.0007 [−0.0019, +0.0006] |
+
+**EB-NeRD's headline shrinks and MIND's does not.** A deployed EB-NeRD model
+would score MRR 0.1897, i.e. **+0.0258 [+0.0229, +0.0287] over stage 1 rather
+than +0.0476** — the reported gain is roughly half "the user engaged with this
+impression". MIND loses nothing, because its gain comes from the
+history-similarity features, which are computable at serving time. We report
+both numbers; the serving-safe one is what a deployment would get.
+
+`has_known_publish_time` carries **0.0% gain** on both datasets, which confirms
+separately that the future-article shortcut is gone under fresh-pool candidates.
+
+### 5.3 Beyond-accuracy and slices (Q5)
 
 | | EB-NeRD | MIND |
 |---|---|---|
@@ -222,8 +286,14 @@ substitutes, and quoting either alone misleads.
 
 | | cold-start | warm | head | tail |
 |---|---|---|---|---|
-| EB-NeRD | 0.2699 (n=65) | 0.2005 (n=24,526) | **0.0000** (n=117) | 0.2023 (n=24,474) |
-| MIND | 0.2580 (n=12,171) | 0.2422 (n=56,511) | 0.1605 (n=8,370) | 0.2571 (n=60,312) |
+| EB-NeRD | 0.2818 (n=67) | 0.2023 (n=25,289) | **0.0000** (n=197) | 0.2041 (n=25,159) |
+| MIND | 0.2625 (n=12,982) | 0.2616 (n=60,170) | 0.1817 (n=9,150) | 0.2732 (n=64,002) |
+
+MIND's cold-start advantage has essentially closed (0.2625 vs 0.2616, from
+0.2580 vs 0.2422): the history-similarity features need click history, so warm
+users gained most (+0.0194 nDCG@5 against +0.0045). That is the expected
+signature of a history-derived feature, and a useful check that it does what it
+claims.
 
 **Cold-start users do slightly better, not worse** — the opposite of the usual
 expectation, and of what we first concluded from a weaker stage-1 arm. The
@@ -339,28 +409,43 @@ would measure catch-up, not serving (it measures 0.065 ms/impression regardless)
 
 | | stage 1 | features | scoring | **total p50 / p99** |
 |---|---|---|---|---|
-| EB-NeRD | 0.33 | 4.23 | 0.37 | **4.95 / 9.15 ms** |
-| MIND | 1.15 | 4.01 | 0.54 | **5.74 / 9.58 ms** |
+| EB-NeRD | 0.12 | 3.42 | 2.58 | **5.97 / 10.50 ms** |
+| MIND | 0.56 | 2.72 | 0.14 | **3.47 / 8.00 ms** |
 
-**p99 sits ~10× inside the suggested 100 ms SLA**, at 191 / 165 single-core QPS,
-costing **$0.00025–0.00029 per 1000 queries** at $0.17/vCPU-hour.
+**p99 sits ~10× inside the suggested 100 ms SLA**, at 170 / 253 single-core QPS,
+costing **$0.00019–0.00028 per 1000 queries** at $0.17/vCPU-hour.
 
-The distribution is the interesting part: **feature building is ~85% of the
-request and the model is ~7%**. The intuitive answer — that the GBDT dominates —
-is wrong, and any latency work should target feature assembly.
+The distribution is the interesting part: **feature building dominates the
+request and stage 1 is negligible** — the intuitive answer, that retrieval or the
+GBDT dominates, is wrong on both counts, and latency work should target feature
+assembly.
+
+**What the history-similarity features cost.** Adding them roughly doubled
+EB-NeRD's request (6.44 → 10.50 ms p99) and raised MIND's by a quarter
+(6.99 → 8.00 ms), from two separate causes worth keeping apart: about +1 ms is
+the features themselves (one BM25 query over the catalogue plus a dot product per
+candidate), and the rest is the model growing, because the extra signal delays
+early stopping (EB-NeRD 99 → 174 trees). Set against §5.1, **MIND buys a
+significant ranking gain for ~25% more serving cost, while EB-NeRD pays ~2× for a
+gain whose CI includes zero** — on EB-NeRD alone these features would not be
+worth shipping.
 
 **Index memory**, measured per component in isolated processes:
 
 | component | EB-NeRD | MIND | in the shipped path? |
 |---|---|---|---|
-| semantic ANN index | 34.5 MiB | 95.6 MiB | **no** |
-| BM25 inverted index | 4.1 MiB | 36.0 MiB | **no** |
+| semantic ANN index | 34.5 MiB | 95.6 MiB | **yes** (history-embedding cosine) |
+| BM25 inverted index | 4.1 MiB | 36.0 MiB | **yes** (history-title BM25) |
 | as-of article statistics | 4.8 MiB | 68.1 MiB | yes |
 | LightGBM booster | 2.7 MiB | 3.1 MiB | yes |
 
-The assignment asks us to measure our ANN index; the honest answer is that **the
-shipped pipeline has none**. Replacing similarity retrieval with a recency
-window deleted the largest serving structure while raising recall 38×.
+This is a finding that reversed during the project, and the reversal is the
+interesting part. Replacing similarity retrieval with a recency window removed
+both indexes from the serving path, so for most of our work the honest answer to
+"measure your ANN index" was **that the shipped pipeline had none**. Adding the
+history-similarity features put them back: MIND's resident footprint goes 68.1 →
+**199.7 MiB**. The trade is explicit — 132 MiB and ~1 ms per request to make the
+MIND re-ranker work at all.
 
 ---
 
@@ -379,7 +464,13 @@ Ranked by what fails first:
 2. **CPU for feature assembly.** 165–191 QPS per core means ~10 cores for 10×
    traffic. Embarrassingly parallel across requests, so a cost line rather than a
    wall.
-3. **Nothing else.** The fresh pool is bounded by *one hour of traffic*, not by
+3. **The similarity structures, on a different axis.** The BM25 index and the
+   embedding table (132 MiB on MIND) grow with **catalogue size**, not with
+   traffic, so 10× traffic does not touch them — but a 10× catalogue does, and the
+   embedding table is the one that would then need an ANN service rather than a
+   resident array. They are also why a smaller K pays twice: fewer candidates to
+   score *and* fewer dot products.
+4. **Nothing else.** The fresh pool is bounded by *one hour of traffic*, not by
    catalogue size, so it grows with QPS and not with corpus age — a property that
    came free with the stage-1 redesign. The booster is ~3 MiB.
 
@@ -393,6 +484,10 @@ statistics drift within a single day.
 
 ## 9. What we would do differently
 
+- **Check the geometry of an embedding space before building features on it.**
+  The same anisotropy that made raw diversity incomparable across datasets (§5.3)
+  also made a history-embedding feature useless on EB-NeRD and decisive on MIND.
+  One measurement — the cosine between two random articles — predicts both.
 - **Question stage 1 before tuning stage 2.** We spent considerable effort on
   re-ranker losses, features and sampling while recall sat at 2.5%. The
   measurement that changed the project — median clicked-article age of 3.1 h
@@ -421,6 +516,7 @@ python run_nrms.py --dataset ebnerd --stage all --freshness  # Q3 improvement
 python scripts/paired_bootstrap.py --dataset ebnerd        # Q3 CIs
 python scripts/serving_benchmark.py --dataset ebnerd       # Q4
 python scripts/extended_eval.py --dataset ebnerd --method popular  # Q5
+python scripts/serving_features_ablation.py --dataset ebnerd       # Q9 + §5.1/§5.2
 ```
 
 Results land in `results/*.json`. `DesignChoices.md` is the full reasoning log,
